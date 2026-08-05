@@ -8,6 +8,7 @@ import { AppToaster } from "@/components/ui/app-toaster"
 import { ImportSessionsWindow } from "@/components/import-sessions/import-sessions-window"
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
 import { isDesktop } from "@/lib/platform"
+import { formatProductTitle } from "@/lib/product-manifest"
 
 const TOAST_DURATION_MS = 6000
 
@@ -30,7 +31,7 @@ function ImportSessionsPageInner() {
   }, [])
 
   useEffect(() => {
-    document.title = `${t("title")} - codeg`
+    document.title = formatProductTitle(t("title"))
   }, [t])
 
   return (

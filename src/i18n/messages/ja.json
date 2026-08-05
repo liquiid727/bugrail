@@ -1291,8 +1291,8 @@
     "loadFailed": "読み込みに失敗しました: {message}"
   },
   "LoginPage": {
-    "documentTitle": "ログイン - codeg",
-    "brand": "Codeg",
+    "documentTitle": "ログイン - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "デスクトップアプリに接続するためのアクセストークンを入力してください",
     "tokenPlaceholder": "アクセストークン",
     "connect": "接続",

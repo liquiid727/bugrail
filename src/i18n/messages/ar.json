@@ -1291,8 +1291,8 @@
     "loadFailed": "فشل التحميل: {message}"
   },
   "LoginPage": {
-    "documentTitle": "تسجيل الدخول - codeg",
-    "brand": "Codeg",
+    "documentTitle": "تسجيل الدخول - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "أدخل رمز الوصول للاتصال بتطبيق سطح المكتب",
     "tokenPlaceholder": "رمز الوصول",
     "connect": "اتصال",

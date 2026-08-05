@@ -41,6 +41,7 @@ import {
   updateSystemProxySettings,
 } from "@/lib/api"
 import { openUrl } from "@/lib/platform"
+import { PRODUCT_MANIFEST } from "@/lib/product-manifest"
 import type { AppLocale } from "@/lib/types"
 import { readLastCheck } from "@/lib/update-check-storage"
 import {
@@ -357,7 +358,7 @@ export function SystemNetworkSettings() {
             <Button
               variant="ghost"
               className="size-5 rounded-full"
-              onClick={() => openUrl("https://github.com/xintaofei/codeg")}
+              onClick={() => openUrl(PRODUCT_MANIFEST.repositoryUrl)}
             >
               <GithubMarkIcon className="size-5" />
             </Button>
@@ -435,11 +436,7 @@ export function SystemNetworkSettings() {
                 ) : (
                   <Button
                     size="sm"
-                    onClick={() =>
-                      openUrl(
-                        "https://github.com/xintaofei/codeg/releases/latest"
-                      )
-                    }
+                    onClick={() => openUrl(PRODUCT_MANIFEST.latestReleaseUrl)}
                   >
                     <ArrowUpCircle className="h-3.5 w-3.5" />
                     {t("viewRelease", { version: availableUpdate.version })}

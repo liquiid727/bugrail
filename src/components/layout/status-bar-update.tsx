@@ -12,6 +12,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { openUrl } from "@/lib/platform"
+import { PRODUCT_MANIFEST } from "@/lib/product-manifest"
 import {
   appUpdateErrorMessageKey,
   normalizeAppUpdateError,
@@ -27,8 +28,6 @@ const ReleaseNotes = dynamic(
   },
   { ssr: false }
 )
-
-const RELEASES_URL = "https://github.com/xintaofei/codeg/releases/latest"
 
 function Spinner({ className }: { className?: string }) {
   return (
@@ -378,7 +377,10 @@ export function StatusBarUpdate() {
                 {t("upgradeTo", { version: available!.version })}
               </Button>
             ) : (
-              <Button size="sm" onClick={() => void openUrl(RELEASES_URL)}>
+              <Button
+                size="sm"
+                onClick={() => void openUrl(PRODUCT_MANIFEST.latestReleaseUrl)}
+              >
                 <ArrowUpCircle className="h-3.5 w-3.5" />
                 {t("viewRelease", { version: available!.version })}
               </Button>

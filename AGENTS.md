@@ -4,7 +4,9 @@ This file provides guidance to Code Agent when working with code in this reposit
 
 ## 项目概述
 
-Codeg（Code Generation）是一个多智能体编码工作台，它将多个智能体（Claude Code、Codex CLI、OpenCode、Gemini CLI、OpenClaw、Cline 等）统一到一个工作区中，支持会话聚合和多智能体协作，支持桌面安装，服务器/Docker 部署。
+Code: Bugrail 是基于 CodeG 的多智能体编码工作台。Bugrail 保留上游 Rust/ACP 核心与兼容协议，在 `src/lib/product-manifest.ts` 和 `src-tauri/src/product/` 中独立管理品牌、bundle、数据目录和更新通道。涉及上游同步时只接收已发布 release tag，不直接跟随 upstream `main`。
+
+`codeg://`、`codeg-events`、现有二进制名和 `CODEG_*` 环境变量仍是兼容合同；除非有迁移规格和回滚方案，不要把它们作为品牌字符串批量替换。
 
 ## 技术栈
 

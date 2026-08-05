@@ -14,6 +14,7 @@ import { useTranslations } from "next-intl"
 import { workTaskList } from "@/lib/api"
 import { sendSystemNotification } from "@/lib/notification"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
+import { formatProductTitle } from "@/lib/product-manifest"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { WorkTask } from "@/lib/types"
 
@@ -146,7 +147,7 @@ function notifyFlips(
       .getState()
       .folders.find((f) => f.id === task.folder_id)
     const folderName = folder ? (folder.alias ?? folder.name) : null
-    const title = folderName ? `${folderName} - Codeg` : "Codeg"
+    const title = formatProductTitle(folderName)
     const body =
       task.status === "review"
         ? t("notifyReview", { title: task.title })

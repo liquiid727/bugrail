@@ -549,6 +549,8 @@ async fn async_main() -> ExitCode {
 
 fn default_data_dir() -> PathBuf {
     dirs::data_dir()
-        .map(|d| d.join("codeg"))
-        .unwrap_or_else(|| PathBuf::from(".codeg-data"))
+        .map(|d| d.join(codeg_lib::product::PRODUCT_MANIFEST.platform_data_dir_name))
+        .unwrap_or_else(|| {
+            PathBuf::from(codeg_lib::product::PRODUCT_MANIFEST.server_fallback_data_dir_name)
+        })
 }

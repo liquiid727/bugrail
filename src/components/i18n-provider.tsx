@@ -188,7 +188,7 @@ export function AppI18nProvider({
         setLanguageSettings(settings)
       })
       .catch((err) => {
-        console.error("[i18n] load language settings failed:", err)
+        console.warn("[i18n] using initial language settings:", err)
       })
       .finally(() => {
         if (!cancelled) {

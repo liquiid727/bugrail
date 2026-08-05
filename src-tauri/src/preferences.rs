@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 const PREFERENCES_FILE_NAME: &str = "preferences.json";
-const CODEG_DIR_NAME: &str = ".codeg";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -21,7 +20,10 @@ pub struct AppPreferences {
 }
 
 pub fn preferences_file_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(CODEG_DIR_NAME).join(PREFERENCES_FILE_NAME))
+    dirs::home_dir().map(|h| {
+        h.join(crate::product::PRODUCT_MANIFEST.data_dir_name)
+            .join(PREFERENCES_FILE_NAME)
+    })
 }
 
 /// Read preferences synchronously. Missing / unreadable / malformed file

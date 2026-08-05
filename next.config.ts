@@ -1,8 +1,7 @@
 import type { NextConfig } from "next"
 import createNextIntlPlugin from "next-intl/plugin"
+import { resolveDevAssetPrefix } from "./src/lib/dev-origin"
 
-const isProd = process.env.NODE_ENV === "production"
-const internalHost = process.env.TAURI_DEV_HOST || "localhost"
 const withNextIntl = createNextIntlPlugin({
   requestConfig: "./src/i18n/request.ts",
   experimental: {
@@ -28,10 +27,13 @@ const withNextIntl = createNextIntlPlugin({
 
 const nextConfig: NextConfig = {
   output: "export",
+  turbopack: {
+    root: process.cwd(),
+  },
   images: {
     unoptimized: true,
   },
-  assetPrefix: isProd ? undefined : `http://${internalHost}:3000`,
+  assetPrefix: resolveDevAssetPrefix(process.env),
 }
 
 export default withNextIntl(nextConfig)

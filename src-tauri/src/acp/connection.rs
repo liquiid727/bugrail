@@ -392,13 +392,12 @@ impl AgentConnection {
 /// Directory handed to codex-acp via `APP_SERVER_LOGS` so its adapter-side
 /// (ACP ↔ Codex app-server translation) logs land on disk for support.
 ///
-/// Roots under the same `<cache>/app.codeg` tree as
+/// Roots under the same product-owned cache tree as
 /// [`binary_cache::cache_dir`] for consistency. Returns `None` — and the
 /// caller injects nothing — when the system cache dir is unknown or the
 /// directory can't be created: diagnostics must never block a connection.
 fn codex_app_server_log_dir() -> Option<String> {
-    let dir = dirs::cache_dir()?
-        .join("app.codeg")
+    let dir = crate::product::platform_cache_dir(&dirs::cache_dir()?)
         .join("acp-logs")
         .join("codex-acp");
     std::fs::create_dir_all(&dir).ok()?;

@@ -1,0 +1,66 @@
+name: Upstream release check
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - id: upstream
+        name: Resolve latest immutable upstream release
+        run: node scripts/check-upstream-release.mjs
+
+      - name: Open or update the upstream sync issue
+        if: steps.upstream.outputs.status == 'update-available'
+        uses: actions/github-script@v7
+        env:
+          LATEST_TAG: ${{ steps.upstream.outputs.latest_tag }}
+          LATEST_COMMIT: ${{ steps.upstream.outputs.latest_commit }}
+          BASELINE_TAG: ${{ steps.upstream.outputs.baseline_tag }}
+          BASELINE_COMMIT: ${{ steps.upstream.outputs.baseline_commit }}
+        with:
+          script: |
+            const title = `Sync upstream CodeG ${process.env.LATEST_TAG}`;
+            const body = [
+              'A newer immutable upstream release is available.',
+              '',
+              `- Current baseline: \`${process.env.BASELINE_TAG}\` (\`${process.env.BASELINE_COMMIT}\`)`,
+              `- Latest release: \`${process.env.LATEST_TAG}\` (\`${process.env.LATEST_COMMIT}\`)`,
+              '',
+              'Follow `design/bugrail-platform-design.md` in the parent SpecOS repository. Do not merge upstream `main` or auto-resolve protected identity conflicts.',
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find((issue) => issue.title === title);
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }

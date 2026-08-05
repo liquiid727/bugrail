@@ -1291,8 +1291,8 @@
     "loadFailed": "Échec du chargement : {message}"
   },
   "LoginPage": {
-    "documentTitle": "Connexion - codeg",
-    "brand": "Codeg",
+    "documentTitle": "Connexion - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "Saisissez votre jeton d'accès pour vous connecter à l'application de bureau",
     "tokenPlaceholder": "Jeton d'accès",
     "connect": "Se connecter",

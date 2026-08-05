@@ -1291,8 +1291,8 @@
     "loadFailed": "載入失敗：{message}"
   },
   "LoginPage": {
-    "documentTitle": "登入 - codeg",
-    "brand": "Codeg",
+    "documentTitle": "登入 - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "輸入存取 Token 以連接到桌面端",
     "tokenPlaceholder": "Access Token",
     "connect": "連接",

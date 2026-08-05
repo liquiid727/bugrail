@@ -1,8 +1,18 @@
-# Codeg
+# Code: Bugrail
 
-[![Release](https://img.shields.io/github/v/release/xintaofei/codeg)](https://github.com/xintaofei/codeg/releases)
-[![Docs](https://img.shields.io/badge/docs-docs.codeg.app-3451b2)](https://docs.codeg.app)
-[![License](https://img.shields.io/github/license/xintaofei/codeg)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/liquiid727/bugrail)](https://github.com/liquiid727/bugrail/releases)
+[![Upstream](https://img.shields.io/badge/upstream-CodeG-3451b2)](https://github.com/xintaofei/codeg)
+[![License](https://img.shields.io/github/license/liquiid727/bugrail)](./LICENSE)
+
+Code: Bugrail is a spec-driven AI coding workspace derived from
+[CodeG](https://github.com/xintaofei/codeg). It keeps CodeG's Rust/ACP runtime
+and mature workbench as the upstream foundation while Bugrail develops its own
+product identity, release channel, data namespace, UI layout, and SpecOS
+workflow integration.
+
+The current bootstrap tracks CodeG release `v0.23.2`. Upstream documentation
+and feature descriptions below remain useful for inherited behavior; Bugrail
+changes are maintained in this fork and released independently.
 
 <p>
   <strong>English</strong> |
@@ -17,7 +27,7 @@
   <a href="./docs/readme/README.ar.md">العربية</a>
 </p>
 
-Codeg (Code Generation) is a multi-agent coding workspace: run every AI coding agent in one place — and let them work together.
+CodeG (Code Generation) is the upstream multi-agent coding workspace: run every AI coding agent in one place — and let them work together.
 
 It aggregates your sessions from every supported agent CLI into one searchable workspace, lets a main agent delegate to sub-agents of other types within a single task, and runs as a desktop app, a standalone server, or a Docker container — with native iOS and Android clients for when you're away from your desk. Twelve agents come built in, and since 0.22 you can register any other ACP-compatible agent yourself.
 

@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-const CODEG_DIR_NAME: &str = ".codeg";
+const CODEG_DIR_NAME: &str = crate::product::PRODUCT_MANIFEST.data_dir_name;
 const PETS_DIR_NAME: &str = "pets";
 const UPLOADS_DIR_NAME: &str = "uploads";
 const LOGS_DIR_NAME: &str = "logs";

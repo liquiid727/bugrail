@@ -14,6 +14,7 @@ import { AppToaster } from "@/components/ui/app-toaster"
 import { getFolder } from "@/lib/api"
 import type { FolderDetail } from "@/lib/types"
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
+import { formatProductTitle } from "@/lib/product-manifest"
 
 const TOAST_DURATION_MS = 6000
 
@@ -83,7 +84,7 @@ function MergePageInner() {
   const pageTitle = folder ? `${t("title")} · ${folder.name}` : t("title")
 
   useEffect(() => {
-    document.title = `${pageTitle} - codeg`
+    document.title = formatProductTitle(pageTitle)
   }, [pageTitle])
 
   return (

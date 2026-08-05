@@ -91,12 +91,13 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
+import { formatProductTitle } from "@/lib/product-manifest"
 
 function WorkspaceDocumentTitle() {
   const { activeFolder } = useActiveFolder()
 
   useEffect(() => {
-    document.title = activeFolder ? `${activeFolder.name} - codeg` : "codeg"
+    document.title = formatProductTitle(activeFolder?.name)
   }, [activeFolder])
 
   return null

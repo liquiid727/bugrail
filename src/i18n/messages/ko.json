@@ -1291,8 +1291,8 @@
     "loadFailed": "불러오기 실패: {message}"
   },
   "LoginPage": {
-    "documentTitle": "로그인 - codeg",
-    "brand": "Codeg",
+    "documentTitle": "로그인 - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "데스크톱 앱에 연결하려면 액세스 토큰을 입력하세요",
     "tokenPlaceholder": "액세스 토큰",
     "connect": "연결",

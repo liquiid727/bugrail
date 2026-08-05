@@ -34,6 +34,7 @@ pub mod paths;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
 pub mod pets;
+pub mod product;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
@@ -109,8 +110,11 @@ mod tauri_app {
             summarize_web_auto_start_error(err)
         );
         tauri::async_runtime::spawn(async move {
-            let _ =
-                notification::send_notification(app, "Codeg Web service".to_string(), body).await;
+            let title = format!(
+                "{} Web service",
+                crate::product::PRODUCT_MANIFEST.display_name
+            );
+            let _ = notification::send_notification(app, title, body).await;
         });
     }
 
@@ -178,7 +182,7 @@ mod tauri_app {
         // Skipped in debug builds so a locally-built `cargo run` instance
         // can run alongside an installed release build of codeg during
         // development. Debug desktop builds use an isolated SQLite file, but
-        // they still share other `app.codeg` data-dir artifacts with release.
+        // they still share other product data-dir artifacts with release.
         #[cfg(not(debug_assertions))]
         let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             windows::show_main_window(app);
@@ -712,7 +716,7 @@ mod tauri_app {
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App("workspace".into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
-                        .title("Codeg")
+                        .title(crate::product::PRODUCT_MANIFEST.display_name)
                         .inner_size(1260.0, 860.0)
                         .min_inner_size(400.0, 600.0);
                     let builder = windows::apply_platform_window_style(builder);

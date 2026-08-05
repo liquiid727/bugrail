@@ -1291,8 +1291,8 @@
     "loadFailed": "Error al cargar: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Iniciar sesión - codeg",
-    "brand": "Codeg",
+    "documentTitle": "Iniciar sesión - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "Introduce tu token de acceso para conectarte a la aplicación de escritorio",
     "tokenPlaceholder": "Token de acceso",
     "connect": "Conectar",

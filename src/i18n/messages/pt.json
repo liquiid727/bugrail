@@ -1291,8 +1291,8 @@
     "loadFailed": "Falha ao carregar: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Entrar - codeg",
-    "brand": "Codeg",
+    "documentTitle": "Entrar - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "Digite seu token de acesso para conectar ao aplicativo de desktop",
     "tokenPlaceholder": "Token de acesso",
     "connect": "Conectar",

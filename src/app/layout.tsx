@@ -13,6 +13,7 @@ import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
 import { WebConnectionGuard } from "@/components/connection/web-connection-guard"
 import { WindowResizeGrips } from "@/components/layout/window-resize-grips"
+import { PRODUCT_MANIFEST } from "@/lib/product-manifest"
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -21,8 +22,8 @@ export const viewport: Viewport = {
 }
 
 export const metadata: Metadata = {
-  title: "codeg",
-  description: "AI Coding Agent Conversation Manager",
+  title: PRODUCT_MANIFEST.displayName,
+  description: PRODUCT_MANIFEST.description,
   icons: {
     icon: [
       { url: "/icon-32x32.png", sizes: "32x32", type: "image/png" },

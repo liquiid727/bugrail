@@ -1,5 +1,5 @@
 #[cfg(feature = "tauri-runtime")]
-const SERVICE_NAME: &str = "codeg";
+const SERVICE_NAME: &str = crate::product::PRODUCT_MANIFEST.keyring_service_name;
 
 fn token_key(account_id: &str) -> String {
     format!("github-token:{}", account_id)
@@ -55,8 +55,12 @@ fn tokens_file_path() -> std::path::PathBuf {
 fn tokens_file_path_for(env_value: Option<&str>) -> std::path::PathBuf {
     let dir = env_value.map(std::path::PathBuf::from).unwrap_or_else(|| {
         dirs::data_dir()
-            .map(|d| d.join("codeg"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".codeg-data"))
+            .map(|d| d.join(crate::product::PRODUCT_MANIFEST.platform_data_dir_name))
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(
+                    crate::product::PRODUCT_MANIFEST.server_fallback_data_dir_name,
+                )
+            })
     });
     crate::git_credential::absolutize(&dir).join("tokens.json")
 }

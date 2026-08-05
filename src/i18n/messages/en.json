@@ -1291,8 +1291,8 @@
     "loadFailed": "Load failed: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Login - codeg",
-    "brand": "Codeg",
+    "documentTitle": "Login - Code: Bugrail",
+    "brand": "Code: Bugrail",
     "subtitle": "Enter your access token to connect to the desktop app",
     "tokenPlaceholder": "Access Token",
     "connect": "Connect",
