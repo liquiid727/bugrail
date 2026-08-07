@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "bugrail"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol-schema",

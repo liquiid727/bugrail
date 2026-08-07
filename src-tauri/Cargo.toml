@@ -1,6 +1,6 @@
 [package]
 name = "bugrail"
-version = "0.23.2"
+version = "0.23.3"
 description = "Spec-driven AI coding workspace based on CodeG"
 authors = ["liquiid727", "feitao"]
 edition = "2021"

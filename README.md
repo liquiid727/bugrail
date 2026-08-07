@@ -10,7 +10,7 @@ and mature workbench as the upstream foundation while Bugrail develops its own
 product identity, release channel, data namespace, UI layout, and SpecOS
 workflow integration.
 
-The current bootstrap tracks CodeG release `v0.23.2`. Upstream documentation
+The current bootstrap tracks CodeG release `v0.23.3`. Upstream documentation
 and feature descriptions below remain useful for inherited behavior; Bugrail
 changes are maintained in this fork and released independently.
 
