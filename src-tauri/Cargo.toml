@@ -42,6 +42,11 @@ path = "src/main.rs"
 required-features = ["tauri-runtime"]
 
 [[bin]]
+name = "bugrail"
+path = "src/bin/bugrail.rs"
+required-features = ["tauri-runtime"]
+
+[[bin]]
 name = "codeg-server"
 path = "src/bin/codeg_server.rs"
 required-features = []

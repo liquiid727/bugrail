@@ -3,6 +3,7 @@
   "productName": "Bugrail",
   "version": "0.23.2",
   "identifier": "io.liquiid.bugrail",
+  "mainBinaryName": "codeg",
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "devUrl": "http://localhost:3000",
