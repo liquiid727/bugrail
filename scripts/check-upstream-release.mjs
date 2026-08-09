@@ -59,7 +59,7 @@ export function evaluateUpstreamRelease({
   return { status: "up-to-date", latestTag, latestCommit }
 }
 
-async function fetchLatestReleaseTag(repository) {
+export async function fetchLatestReleaseTag(repository) {
   const payload = await fetchGitHubJson(
     `https://api.github.com/repos/${repository}/releases/latest`
   )
@@ -85,7 +85,7 @@ async function fetchGitHubJson(url) {
   return response.json()
 }
 
-async function resolveTagCommit(repository, tag) {
+export async function resolveTagCommit(repository, tag) {
   const ref = await fetchGitHubJson(
     `https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`
   )
