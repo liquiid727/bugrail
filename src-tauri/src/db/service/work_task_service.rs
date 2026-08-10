@@ -15,7 +15,7 @@
 //!   on the done row.
 
 use chrono::Utc;
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, Order};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
@@ -23,12 +23,18 @@ use sea_orm::{
 };
 
 use crate::db::entities::work_task::WorkTaskStatus;
-use crate::db::entities::{folder, work_task, work_task_event, work_task_settings, work_task_template};
+use crate::db::entities::{
+    folder, work_task, work_task_contract, work_task_event, work_task_gate_result,
+    work_task_settings, work_task_template,
+};
 use crate::db::error::DbError;
 use crate::models::{
-    WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskMergeState,
+    AcceptanceCriterionSnapshot, GateRequirement, WorkTaskConfig, WorkTaskContractInfo,
+    WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskGateDecision,
+    WorkTaskGatePolicy, WorkTaskGateResultInfo, WorkTaskGateStatus, WorkTaskGateType,
+    WorkTaskInfo, WorkTaskMergeState,
 };
+use crate::work_task::gate_decision::{evaluate, GateAttemptInput};
 
 // `WorkTaskPendingMerge` / `WorkTaskPreflight` are referenced via `crate::models::`
 // in their fns to keep this import list stable.
@@ -1796,6 +1802,256 @@ pub async fn template_delete(conn: &DatabaseConnection, id: i32) -> Result<(), D
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// SpecOS contract & gate repositories (BUGRAIL-SPECOS-001.R01/R03/R05/R09)
+// ---------------------------------------------------------------------------
+
+fn contract_to_info(m: work_task_contract::Model) -> Result<WorkTaskContractInfo, DbError> {
+    let acceptance_criteria: Vec<AcceptanceCriterionSnapshot> =
+        serde_json::from_str(&m.acceptance_criteria).map_err(|e| {
+            DbError::Validation(format!("stored contract AC snapshot invalid: {e}"))
+        })?;
+    let gate_policy: WorkTaskGatePolicy = serde_json::from_str(&m.gate_policy).map_err(|e| {
+        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
+    })?;
+    Ok(WorkTaskContractInfo {
+        task_id: m.task_id,
+        source_spec_id: m.source_spec_id,
+        source_spec_version: m.source_spec_version,
+        source_spec_path: m.source_spec_path,
+        source_spec_hash: m.source_spec_hash,
+        acceptance_criteria,
+        gate_policy,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+    })
+}
+
+/// Convert a persisted gate attempt to its wire DTO. Corrupt type/status strings
+/// are a validation error (never a silent fallback), so a bad row surfaces
+/// instead of passing as a different gate.
+pub fn gate_result_info(
+    m: work_task_gate_result::Model,
+) -> Result<WorkTaskGateResultInfo, DbError> {
+    let gate_type = WorkTaskGateType::from_wire(&m.gate_type)
+        .map_err(|e| DbError::Validation(format!("gate result row {}: {e}", m.id)))?;
+    let status = WorkTaskGateStatus::from_wire(&m.status)
+        .map_err(|e| DbError::Validation(format!("gate result row {}: {e}", m.id)))?;
+    Ok(WorkTaskGateResultInfo {
+        id: m.id,
+        task_id: m.task_id,
+        run_seq: m.run_seq,
+        gate_id: m.gate_id,
+        gate_type,
+        status,
+        required: m.required,
+        reusable: m.reusable,
+        actor: m.actor,
+        evidence: m
+            .evidence
+            .as_deref()
+            .and_then(|e| serde_json::from_str(e).ok()),
+        reason: m.reason,
+        started_at: m.started_at,
+        finished_at: m.finished_at,
+    })
+}
+
+/// Load a task's contract row (`None` for legacy/unbound tasks).
+pub async fn get_contract<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Option<work_task_contract::Model>, DbError> {
+    work_task_contract::Entity::find_by_id(task_id)
+        .one(conn)
+        .await
+        .map_err(DbError::from)
+}
+
+/// Load a task's contract as a wire DTO.
+pub async fn contract_get<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Option<WorkTaskContractInfo>, DbError> {
+    match get_contract(conn, task_id).await? {
+        Some(m) => Ok(Some(contract_to_info(m)?)),
+        None => Ok(None),
+    }
+}
+
+/// Upsert (insert or replace) the contract snapshot. Callers wrap this and the
+/// `spec_contract_bound` timeline event in ONE transaction so the reference can
+/// never land without its audit trail.
+pub async fn upsert_contract<C: ConnectionTrait>(
+    conn: &C,
+    model: work_task_contract::ActiveModel,
+) -> Result<(), DbError> {
+    // `save` only updates when the row exists; a missing row must be inserted
+    // explicitly (the PK is caller-supplied, not auto-increment).
+    let task_id = model.task_id.clone().unwrap();
+    let exists = work_task_contract::Entity::find_by_id(task_id)
+        .one(conn)
+        .await?
+        .is_some();
+    if exists {
+        model.update(conn).await?;
+    } else {
+        model.insert(conn).await?;
+    }
+    Ok(())
+}
+
+/// Append a gate attempt row. Append-only: no update/delete path is exposed.
+pub async fn insert_gate_result<C: ConnectionTrait>(
+    conn: &C,
+    model: work_task_gate_result::ActiveModel,
+) -> Result<work_task_gate_result::Model, DbError> {
+    model.insert(conn).await.map_err(DbError::from)
+}
+
+/// Preflight gates in the task's snapshotted policy. `None` for a legacy task
+/// with no contract; empty for a contract with no preflight gates.
+pub async fn contract_preflight_gates<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Vec<GateRequirement>, DbError> {
+    let Some(contract) = get_contract(conn, task_id).await? else {
+        return Ok(Vec::new());
+    };
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
+        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
+    })?;
+    Ok(policy
+        .gates
+        .into_iter()
+        .filter(|g| g.gate_type == WorkTaskGateType::Preflight)
+        .collect())
+}
+
+/// Record one engine-owned preflight gate attempt row per contract preflight
+/// gate (append-only, scoped to `run_seq`). Legacy tasks (no contract) are a
+/// no-op. Returns the row ids in policy order.
+pub async fn record_preflight_gates<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    run_seq: i32,
+    status: WorkTaskGateStatus,
+    reason: Option<String>,
+    evidence: Option<serde_json::Value>,
+) -> Result<Vec<i32>, DbError> {
+    let gates = contract_preflight_gates(conn, task_id).await?;
+    let now = Utc::now();
+    let mut ids = Vec::with_capacity(gates.len());
+    for gate in gates {
+        let row = insert_gate_result(
+            conn,
+            work_task_gate_result::ActiveModel {
+                id: NotSet,
+                task_id: Set(task_id),
+                run_seq: Set(run_seq),
+                gate_id: Set(gate.id),
+                gate_type: Set(WorkTaskGateType::Preflight.as_str().to_string()),
+                status: Set(status.as_str().to_string()),
+                required: Set(gate.required),
+                reusable: Set(gate.reusable),
+                actor: Set("engine".to_string()),
+                evidence: Set(evidence.as_ref().map(|e| e.to_string())),
+                reason: Set(reason.clone()),
+                started_at: Set(now),
+                finished_at: Set((status != WorkTaskGateStatus::Running).then_some(now)),
+            },
+        )
+        .await?;
+        ids.push(row.id);
+    }
+    Ok(ids)
+}
+
+/// List gate attempts, optionally scoped to one run. Ordered by `(run_seq, id)`
+/// so the append order is stable and the latest attempt of each run is last.
+pub async fn list_gate_results<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    run_seq: Option<i32>,
+) -> Result<Vec<work_task_gate_result::Model>, DbError> {
+    let mut q = work_task_gate_result::Entity::find()
+        .filter(work_task_gate_result::Column::TaskId.eq(task_id));
+    if let Some(rs) = run_seq {
+        q = q.filter(work_task_gate_result::Column::RunSeq.eq(rs));
+    }
+    q.order_by(work_task_gate_result::Column::RunSeq, Order::Asc)
+        .order_by(work_task_gate_result::Column::Id, Order::Asc)
+        .all(conn)
+        .await
+        .map_err(DbError::from)
+}
+
+/// Latest attempt (highest row id) of one gate for one run.
+pub async fn latest_gate_result<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    run_seq: i32,
+    gate_id: &str,
+) -> Result<Option<work_task_gate_result::Model>, DbError> {
+    work_task_gate_result::Entity::find()
+        .filter(work_task_gate_result::Column::TaskId.eq(task_id))
+        .filter(work_task_gate_result::Column::RunSeq.eq(run_seq))
+        .filter(work_task_gate_result::Column::GateId.eq(gate_id))
+        .order_by(work_task_gate_result::Column::Id, Order::Desc)
+        .one(conn)
+        .await
+        .map_err(DbError::from)
+}
+
+/// Compute the current merge/complete decision from persisted facts. Runtime
+/// facts (`spec_stale`, `current_head`) are supplied by the caller — the Spec
+/// re-hash reader and git — so this stays a pure aggregation over the DB.
+pub async fn gate_decision<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    current_head: Option<&str>,
+    spec_stale: bool,
+) -> Result<WorkTaskGateDecision, DbError> {
+    let Some(contract) = get_contract(conn, task_id).await? else {
+        // Legacy task: no contract → nothing gates it.
+        return Ok(WorkTaskGateDecision {
+            eligible: true,
+            stale_spec: false,
+            required: vec![],
+            unmet: vec![],
+            waived: vec![],
+        });
+    };
+    let task = work_task::Entity::find_by_id(task_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {task_id}")))?;
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
+        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
+    })?;
+    let rows = list_gate_results(conn, task_id, None).await?;
+    let attempts = rows.iter().filter_map(gate_attempt_input).collect::<Vec<_>>();
+    Ok(evaluate(&policy, &attempts, task.run_seq, spec_stale, current_head))
+}
+
+fn gate_attempt_input(m: &work_task_gate_result::Model) -> Option<GateAttemptInput> {
+    Some(GateAttemptInput {
+        id: m.id as i64,
+        run_seq: m.run_seq,
+        gate_id: m.gate_id.clone(),
+        gate_type: WorkTaskGateType::from_wire(&m.gate_type).ok()?,
+        status: WorkTaskGateStatus::from_wire(&m.status).ok()?,
+        required: m.required,
+        reusable: m.reusable,
+        actor: m.actor.clone(),
+        reason: m.reason.clone(),
+        evidence: m
+            .evidence
+            .as_deref()
+            .and_then(|e| serde_json::from_str(e).ok()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2566,5 +2822,237 @@ mod tests {
         assert!(template_save(&db.conn, &d("  ", "x")).await.is_err());
         template_delete(&db.conn, a.id).await.unwrap();
         assert_eq!(template_list(&db.conn).await.unwrap().len(), 1);
+    }
+
+    // --- SpecOS contract & gate repository tests (BUGRAIL-SPECOS-001) ---
+
+    fn contract_active(task_id: i32) -> work_task_contract::ActiveModel {
+        work_task_contract::ActiveModel {
+            task_id: Set(task_id),
+            source_spec_id: Set("BUGRAIL-SPECOS-001".to_string()),
+            source_spec_version: Set("0.3".to_string()),
+            source_spec_path: Set(
+                ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md".to_string(),
+            ),
+            source_spec_hash: Set("81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d".to_string()),
+            acceptance_criteria: Set(
+                serde_json::json!([
+                    { "id": "AC01", "title": "Bind", "text": "Preview then bind stores exact metadata" }
+                ])
+                .to_string(),
+            ),
+            gate_policy: Set(
+                serde_json::json!({
+                    "gates": [{
+                        "id": "preflight",
+                        "type": "preflight",
+                        "required": true,
+                        "reusable": false,
+                        "allow_waiver": true
+                    }]
+                })
+                .to_string(),
+            ),
+            created_at: Set(Utc::now()),
+            updated_at: Set(Utc::now()),
+        }
+    }
+
+    fn gate_active(task_id: i32, run_seq: i32, gate_id: &str, status: &str) -> work_task_gate_result::ActiveModel {
+        work_task_gate_result::ActiveModel {
+            id: NotSet,
+            task_id: Set(task_id),
+            run_seq: Set(run_seq),
+            gate_id: Set(gate_id.to_string()),
+            gate_type: Set("preflight".to_string()),
+            status: Set(status.to_string()),
+            required: Set(true),
+            reusable: Set(false),
+            actor: Set("engine".to_string()),
+            evidence: Set(None),
+            reason: Set(matches!(status, "failed" | "blocked" | "waived").then(|| "why".to_string())),
+            started_at: Set(Utc::now()),
+            finished_at: Set((status != "running").then(Utc::now)),
+        }
+    }
+
+    #[tokio::test]
+    async fn specos_contract_event_gate_commit_atomically() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let txn = db.conn.begin().await.unwrap();
+        upsert_contract(&txn, contract_active(t.id)).await.unwrap();
+        record_event(
+            &txn,
+            t.id,
+            "spec_contract_bound",
+            "user",
+            Some(serde_json::json!({ "source_spec_hash": "oldhash" })),
+        )
+        .await
+        .unwrap();
+        insert_gate_result(&txn, gate_active(t.id, 0, "preflight", "passed"))
+            .await
+            .unwrap();
+        txn.commit().await.unwrap();
+
+        let contract = contract_get(&db.conn, t.id)
+            .await
+            .unwrap()
+            .expect("contract persisted");
+        assert_eq!(contract.source_spec_id, "BUGRAIL-SPECOS-001");
+        assert_eq!(contract.gate_policy.gates.len(), 1);
+        let events = list_events(&db.conn, t.id, 100).await.unwrap();
+        assert!(events.iter().any(|e| e.kind == "spec_contract_bound"));
+        assert_eq!(list_gate_results(&db.conn, t.id, None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn specos_contract_and_event_rollback_together() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos-rb").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let txn = db.conn.begin().await.unwrap();
+        upsert_contract(&txn, contract_active(t.id)).await.unwrap();
+        record_event(&txn, t.id, "spec_contract_bound", "user", None)
+            .await
+            .unwrap();
+        txn.rollback().await.unwrap();
+
+        assert!(contract_get(&db.conn, t.id).await.unwrap().is_none());
+        let events = list_events(&db.conn, t.id, 100).await.unwrap();
+        assert!(!events.iter().any(|e| e.kind == "spec_contract_bound"));
+    }
+
+    #[tokio::test]
+    async fn specos_contract_and_gates_cascade_on_task_delete() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos-cascade").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        upsert_contract(&db.conn, contract_active(t.id)).await.unwrap();
+        insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "passed"))
+            .await
+            .unwrap();
+
+        work_task::Entity::delete_by_id(t.id).exec(&db.conn).await.unwrap();
+
+        assert!(get_contract(&db.conn, t.id).await.unwrap().is_none());
+        assert!(list_gate_results(&db.conn, t.id, None).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn specos_gate_results_are_append_only_and_latest_wins() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos-append").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let old_run = insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "passed"))
+            .await
+            .unwrap();
+        let first = insert_gate_result(&db.conn, gate_active(t.id, 1, "preflight", "running"))
+            .await
+            .unwrap();
+        let second = insert_gate_result(&db.conn, gate_active(t.id, 1, "preflight", "passed"))
+            .await
+            .unwrap();
+
+        let all = list_gate_results(&db.conn, t.id, None).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].id, old_run.id, "ordered by run_seq then id");
+        assert_eq!(all[1].id, first.id);
+        assert_eq!(all[2].id, second.id);
+
+        let latest = latest_gate_result(&db.conn, t.id, 1, "preflight")
+            .await
+            .unwrap()
+            .expect("latest attempt");
+        assert_eq!(latest.id, second.id);
+
+        let run0 = list_gate_results(&db.conn, t.id, Some(0)).await.unwrap();
+        assert_eq!(run0.len(), 1);
+        assert_eq!(run0[0].id, old_run.id);
+    }
+
+    #[tokio::test]
+    async fn specos_gate_decision_reflects_persisted_facts() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos-decision").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // No contract → legacy → nothing gates it.
+        let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
+        assert!(d.eligible && d.required.is_empty());
+
+        upsert_contract(&db.conn, contract_active(t.id)).await.unwrap();
+
+        // No attempt yet → unmet.
+        let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
+        assert!(!d.eligible);
+        assert_eq!(d.unmet.len(), 1);
+        assert_eq!(d.unmet[0].gate_id, "preflight");
+
+        // Passing attempt at the current run → eligible.
+        insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "passed"))
+            .await
+            .unwrap();
+        let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
+        assert!(d.eligible && d.unmet.is_empty());
+
+        // A later failed attempt wins over the earlier pass → unmet.
+        insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "failed"))
+            .await
+            .unwrap();
+        let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
+        assert!(!d.eligible);
+
+        // Latest pass again + stale spec → ineligible with stale_spec=true.
+        insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "passed"))
+            .await
+            .unwrap();
+        let d = gate_decision(&db.conn, t.id, None, true).await.unwrap();
+        assert!(!d.eligible && d.stale_spec);
+    }
+
+    #[tokio::test]
+    async fn specos_gate_decision_reuses_only_valid_reusable_preflight() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-specos-reuse").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let mut active = contract_active(t.id);
+        active.gate_policy = Set(
+            serde_json::json!({
+                "gates": [{
+                    "id": "preflight",
+                    "type": "preflight",
+                    "required": true,
+                    "reusable": true,
+                    "allow_waiver": false
+                }]
+            })
+            .to_string(),
+        );
+        upsert_contract(&db.conn, active).await.unwrap();
+
+        // Passing reusable result from an old run whose verified_head is head1.
+        let mut gate = gate_active(t.id, 1, "preflight", "passed");
+        gate.reusable = Set(true);
+        gate.evidence = Set(Some(serde_json::json!({ "verified_head": "head1" }).to_string()));
+        insert_gate_result(&db.conn, gate).await.unwrap();
+
+        // Fresh task run_seq is 0; matching head → reusable result applies.
+        let d = gate_decision(&db.conn, t.id, Some("head1"), false).await.unwrap();
+        assert!(d.eligible, "matching reusable result passes");
+
+        // HEAD moved → the reusable result no longer applies.
+        let d = gate_decision(&db.conn, t.id, Some("head2"), false).await.unwrap();
+        assert!(!d.eligible);
+
+        // Spec changed → not applicable either.
+        let d = gate_decision(&db.conn, t.id, Some("head1"), true).await.unwrap();
+        assert!(!d.eligible);
     }
 }

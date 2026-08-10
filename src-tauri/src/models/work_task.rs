@@ -294,6 +294,186 @@ pub struct WorkTaskChangedFile {
     pub deletions: i32,
 }
 
+/// Gate types supported by the first SpecOS slice (BUGRAIL-SPECOS-001.R06).
+/// `preflight` is engine-owned; `human_approval` is trusted-user only. Agent
+/// verdicts and arbitrary client payloads can satisfy neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskGateType {
+    Preflight,
+    HumanApproval,
+}
+
+impl WorkTaskGateType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkTaskGateType::Preflight => "preflight",
+            WorkTaskGateType::HumanApproval => "human_approval",
+        }
+    }
+
+    /// Decode a persisted string. Unknown values are an error rather than a
+    /// silent fallback, so a corrupt/mismatched row surfaces instead of passing.
+    pub fn from_wire(value: &str) -> Result<Self, String> {
+        match value {
+            "preflight" => Ok(WorkTaskGateType::Preflight),
+            "human_approval" => Ok(WorkTaskGateType::HumanApproval),
+            other => Err(format!("unknown gate type: {other}")),
+        }
+    }
+}
+
+/// Status of one gate attempt. `running` then `passed | failed | blocked` for
+/// engine-owned preflight; `passed | waived` for a trusted-user decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskGateStatus {
+    Running,
+    Passed,
+    Failed,
+    Blocked,
+    Waived,
+}
+
+impl WorkTaskGateStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkTaskGateStatus::Running => "running",
+            WorkTaskGateStatus::Passed => "passed",
+            WorkTaskGateStatus::Failed => "failed",
+            WorkTaskGateStatus::Blocked => "blocked",
+            WorkTaskGateStatus::Waived => "waived",
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Result<Self, String> {
+        match value {
+            "running" => Ok(WorkTaskGateStatus::Running),
+            "passed" => Ok(WorkTaskGateStatus::Passed),
+            "failed" => Ok(WorkTaskGateStatus::Failed),
+            "blocked" => Ok(WorkTaskGateStatus::Blocked),
+            "waived" => Ok(WorkTaskGateStatus::Waived),
+            other => Err(format!("unknown gate status: {other}")),
+        }
+    }
+}
+
+/// One gate in a snapshotted policy. `type` is the wire name (matches the
+/// Feature Spec DTO); Rust keeps it as `gate_type` to avoid the keyword.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateRequirement {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub gate_type: WorkTaskGateType,
+    /// Whether this gate participates in the merge/complete decision.
+    pub required: bool,
+    /// A passing preflight may be reused across runs while its evidence
+    /// `verified_head` matches the current Worktree HEAD and the bound Spec hash
+    /// is unchanged. `human_approval` must be non-reusable.
+    pub reusable: bool,
+    /// Whether a trusted user may waive this gate when it is not passing.
+    pub allow_waiver: bool,
+}
+
+/// Snapshotted gate policy of a contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkTaskGatePolicy {
+    pub gates: Vec<GateRequirement>,
+}
+
+/// One acceptance criterion of a Feature Spec. The client selects by `id`;
+/// text is always resolved server-side from the file (never submitted by the
+/// client).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptanceCriterionSnapshot {
+    pub id: String,
+    pub title: String,
+    pub text: String,
+}
+
+/// Preview result of a repository-local Feature Spec path. The client reviews
+/// identity/hash/AC and submits `expected_source_spec_hash` back on bind.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskContractPreview {
+    pub source_spec_id: String,
+    pub source_spec_version: String,
+    pub source_spec_path: String,
+    pub source_spec_hash: String,
+    pub acceptance_criteria: Vec<AcceptanceCriterionSnapshot>,
+    /// Hash of the task's current binding, when already contracted (rebind).
+    pub current_binding_hash: Option<String>,
+}
+
+/// Bind/rebind payload. The hash is the optimistic-concurrency token from the
+/// preview; selected AC are ids resolved against the file server-side. No actor
+/// field: actor is derived from the authenticated command context.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkTaskContractDraft {
+    pub source_spec_path: String,
+    pub expected_source_spec_hash: String,
+    pub selected_acceptance_criteria_ids: Vec<String>,
+    pub gate_policy: WorkTaskGatePolicy,
+}
+
+/// Stored contract of a bound task.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskContractInfo {
+    pub task_id: i32,
+    pub source_spec_id: String,
+    pub source_spec_version: String,
+    pub source_spec_path: String,
+    pub source_spec_hash: String,
+    pub acceptance_criteria: Vec<AcceptanceCriterionSnapshot>,
+    pub gate_policy: WorkTaskGatePolicy,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One persisted gate attempt on the wire.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskGateResultInfo {
+    pub id: i32,
+    pub task_id: i32,
+    pub run_seq: i32,
+    pub gate_id: String,
+    pub gate_type: WorkTaskGateType,
+    pub status: WorkTaskGateStatus,
+    pub required: bool,
+    pub reusable: bool,
+    pub actor: String,
+    pub evidence: Option<serde_json::Value>,
+    pub reason: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// One required gate in a computed decision.
+#[derive(Debug, Clone, Serialize)]
+pub struct GateDecisionItem {
+    pub gate_id: String,
+    pub gate_type: WorkTaskGateType,
+    /// Latest attempt status; `None` when there is no applicable attempt for the
+    /// current run (and no reusable result applies).
+    pub status: Option<WorkTaskGateStatus>,
+    /// Explainable reason for the item's bucket. Wire string; the client maps it
+    /// to `Tasks.specos.*` copy.
+    pub reason: String,
+}
+
+/// Explainable merge/complete eligibility computed from persisted facts. The
+/// frontend renders it but never computes it; the backend is authoritative.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskGateDecision {
+    pub eligible: bool,
+    pub stale_spec: bool,
+    /// Every required gate with its latest applicable state.
+    pub required: Vec<GateDecisionItem>,
+    /// Required gates that are not currently eligible (block merge/complete).
+    pub unmet: Vec<GateDecisionItem>,
+    /// Required gates validly waived by a trusted user.
+    pub waived: Vec<GateDecisionItem>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +500,36 @@ mod tests {
         assert!(settings.auto_process);
         assert!(!settings.delete_worktree_default);
         assert_eq!(settings.init_command.as_deref(), Some("pnpm install"));
+    }
+
+    /// The actor is derived from the authenticated command context; a request
+    /// that smuggles one must be ignored, never honored (Feature Spec §5.2).
+    #[test]
+    fn contract_draft_ignores_request_actor() {
+        let raw = r#"{
+            "source_spec_path": ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md",
+            "expected_source_spec_hash": "abc",
+            "selected_acceptance_criteria_ids": ["AC01"],
+            "gate_policy": {
+                "gates": [{
+                    "id": "preflight",
+                    "type": "preflight",
+                    "required": true,
+                    "reusable": false,
+                    "allow_waiver": true
+                }]
+            },
+            "actor": "engine",
+            "reason": "forged"
+        }"#;
+        let draft: WorkTaskContractDraft = serde_json::from_str(raw).expect("decode");
+        assert_eq!(draft.source_spec_path, ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md");
+        assert_eq!(draft.gate_policy.gates.len(), 1);
+        assert_eq!(
+            draft.gate_policy.gates[0].gate_type,
+            WorkTaskGateType::Preflight,
+            "wire `type` maps to gate_type"
+        );
+        // There is no actor field to read; serde dropped the unknown keys.
     }
 }

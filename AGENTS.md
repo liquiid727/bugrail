@@ -115,6 +115,15 @@ INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
 - **服务器部署**：通过环境变量配置（`CODEG_PORT`、`CODEG_HOST`、`CODEG_TOKEN`、`CODEG_DATA_DIR`、`CODEG_STATIC_DIR`）
 - **Docker 支持**：多阶段构建（Node.js + Rust），支持 `docker-compose` 一键部署
 
+## SpecOS 交付资料
+
+- BugRail 的 SpecOS 产品、设计、Feature/Test Spec、Issue 与当前交接资料只放在本仓库内；目录由 `.specos/manifest.yaml` 声明。
+- 读取顺序：`docs/specos/product-vision.md` → `design/` 与 `design/adr/` → `.prd/` → `.features/roadmap.md` → 活跃 Feature/Test Spec → `.issues/` → `current/` 与验证证据。
+- 命名、版本和 hash 绑定遵循 `rules/specos-artifact-conventions.md`。
+- `docs/specos/rfcs/` 仅用于设计探索，不授权实现，也不能作为发布证据。
+- SpecOS 功能优先扩展现有 WorkTask、ACP、Worktree、EventEmitter、SQLite、Tauri/Axum 和 Tasks UI 模块。新增并行状态机、事件总线、Runtime 或存储前，必须说明现有模块为什么无法承接。
+- `codeg` 二进制、命令、路由、协议、数据库文件名和 `CODEG_*` 环境变量属于兼容合同；除非 Feature Spec 同时给出迁移和回滚，不得作为品牌字符串替换。
+
 ## 代码风格
 
 - Prettier：无分号、尾逗号（es5）、2 空格缩进、80 字符宽度

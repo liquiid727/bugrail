@@ -1337,6 +1337,30 @@ pub fn build_router(
             "/work_task_template_delete",
             post(handlers::work_task::work_task_template_delete),
         )
+        .route(
+            "/work_task_contract_preview",
+            post(handlers::work_task::work_task_contract_preview),
+        )
+        .route(
+            "/work_task_contract_bind",
+            post(handlers::work_task::work_task_contract_bind),
+        )
+        .route(
+            "/work_task_contract_get",
+            post(handlers::work_task::work_task_contract_get),
+        )
+        .route(
+            "/work_task_gate_list",
+            post(handlers::work_task::work_task_gate_list),
+        )
+        .route(
+            "/work_task_gate_decision",
+            post(handlers::work_task::work_task_gate_decision),
+        )
+        .route(
+            "/work_task_gate_human_decide",
+            post(handlers::work_task::work_task_gate_human_decide),
+        )
         // ─── Workspace background ───
         .route(
             "/background_read",

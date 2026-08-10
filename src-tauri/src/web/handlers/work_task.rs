@@ -7,8 +7,9 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::work_task as core;
 use crate::models::{
-    WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskChangedFile, WorkTaskContractDraft, WorkTaskContractInfo, WorkTaskContractPreview,
+    WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskGateDecision,
+    WorkTaskGateResultInfo, WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
 
 fn default_event_limit() -> u64 {
@@ -153,6 +154,49 @@ pub struct TemplateSaveParams {
     pub draft: WorkTaskTemplateDraft,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractPreviewParams {
+    pub task_id: i32,
+    pub source_spec_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractBindParams {
+    pub task_id: i32,
+    pub draft: WorkTaskContractDraft,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractGetParams {
+    pub task_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateListParams {
+    pub task_id: i32,
+    #[serde(default)]
+    pub run_seq: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateDecisionParams {
+    pub task_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateHumanDecideParams {
+    pub task_id: i32,
+    pub gate_id: String,
+    pub decision: String,
+    pub reason: Option<String>,
+}
+
 pub async fn work_task_list(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ListParams>,
@@ -293,21 +337,59 @@ pub async fn work_task_cancel(
 }
 
 pub async fn work_task_merge(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<MergeParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_merge_core(params.id, params.message, params.delete_worktree)
-        .await
-        .map_err(AppCommandError::from)?;
+    core::work_task_merge_core(
+        &state.emitter,
+        &state.db,
+        params.id,
+        params.message,
+        params.delete_worktree,
+    )
+    .await?;
     Ok(Json(()))
 }
 
 pub async fn work_task_complete(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CompleteParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_complete_core(params.id, params.delete_worktree)
-        .await
-        .map_err(AppCommandError::from)?;
+    core::work_task_complete_core(&state.emitter, &state.db, params.id, params.delete_worktree)
+        .await?;
     Ok(Json(()))
+}
+
+pub async fn work_task_gate_list(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<GateListParams>,
+) -> Result<Json<Vec<WorkTaskGateResultInfo>>, AppCommandError> {
+    let result = core::work_task_gate_list_core(&state.db, params.task_id, params.run_seq).await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_gate_decision(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<GateDecisionParams>,
+) -> Result<Json<WorkTaskGateDecision>, AppCommandError> {
+    let result = core::work_task_gate_decision_core(&state.db, params.task_id).await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_gate_human_decide(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<GateHumanDecideParams>,
+) -> Result<Json<WorkTaskGateResultInfo>, AppCommandError> {
+    let result = core::work_task_gate_human_decide_core(
+        &state.emitter,
+        &state.db,
+        params.task_id,
+        params.gate_id,
+        params.decision,
+        params.reason,
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 pub async fn work_task_archive(
@@ -427,4 +509,35 @@ pub async fn work_task_template_delete(
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
+}
+
+pub async fn work_task_contract_preview(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ContractPreviewParams>,
+) -> Result<Json<WorkTaskContractPreview>, AppCommandError> {
+    let result = core::work_task_contract_preview_core(
+        &state.db,
+        params.task_id,
+        params.source_spec_path,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_contract_bind(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ContractBindParams>,
+) -> Result<Json<WorkTaskContractInfo>, AppCommandError> {
+    let result =
+        core::work_task_contract_bind_core(&state.emitter, &state.db, params.task_id, params.draft)
+            .await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_contract_get(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ContractGetParams>,
+) -> Result<Json<Option<WorkTaskContractInfo>>, AppCommandError> {
+    let result = core::work_task_contract_get_core(&state.db, params.task_id).await?;
+    Ok(Json(result))
 }

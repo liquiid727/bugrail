@@ -38,6 +38,11 @@ It aggregates your sessions from every supported agent CLI into one searchable w
 
 **Full documentation lives at [docs.codeg.app](https://docs.codeg.app)** — [Getting Started](https://docs.codeg.app/getting-started/) · [Guide](https://docs.codeg.app/guide/) · [Reference](https://docs.codeg.app/reference/)
 
+BugRail-specific SpecOS product and delivery documentation starts at
+[`docs/specos/README.md`](./docs/specos/README.md). It maps proposed behavior to
+the inherited CodeG WorkTask, ACP, event, persistence, transport, and Tasks UI
+modules before creating Feature Specs.
+
 ## 💖 Sponsors
 
 <table>

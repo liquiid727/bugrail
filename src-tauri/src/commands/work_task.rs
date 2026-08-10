@@ -8,16 +8,25 @@
 use crate::app_error::AppCommandError;
 use crate::commands::folders::{get_folder_core, git_diff_with_branch};
 use crate::db::entities::work_task::WorkTaskStatus;
+use crate::db::entities::{work_task_contract, work_task_gate_result};
 use crate::db::error::DbError;
 use crate::db::service::work_task_service;
 use crate::db::AppDatabase;
 use crate::models::{
-    FollowUpIntent, WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
-    WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    AcceptanceCriterionSnapshot, FollowUpIntent, WorkTaskChangedFile, WorkTaskContractDraft,
+    WorkTaskContractInfo, WorkTaskContractPreview, WorkTaskDraft, WorkTaskEventInfo,
+    WorkTaskFolderSettings, WorkTaskGateDecision, WorkTaskGatePolicy, WorkTaskGateResultInfo,
+    WorkTaskGateStatus, WorkTaskGateType, WorkTaskInfo, WorkTaskTemplateDraft,
+    WorkTaskTemplateInfo,
 };
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
 };
+use crate::work_task::{gate_decision, spec_reader};
+use sea_orm::ActiveValue::{NotSet, Set};
+use sea_orm::TransactionTrait;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 fn engine() -> Result<std::sync::Arc<crate::work_task::TaskEngine>, DbError> {
     crate::work_task::engine()
@@ -216,25 +225,308 @@ pub async fn work_task_cancel_core(id: i32, reason: Option<String>) -> Result<()
 /// review with a readable error). This awaits only the dispatch (validation +
 /// agent spawn), so refused merges surface directly in the dialog.
 /// `message: None` = the agent writes the commit message itself.
+///
+/// A contract-bound task must first be gate-eligible (Spec not stale, every
+/// required gate passed or validly waived). A blocked merge keeps `review` and
+/// records a `quality_gate_blocked` timeline event.
 pub async fn work_task_merge_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
     id: i32,
     message: Option<String>,
     delete_worktree: bool,
-) -> Result<(), DbError> {
+) -> Result<(), AppCommandError> {
+    enforce_gate_eligibility(emitter, db, id).await?;
     engine()?
         .merge_task(id, message, delete_worktree)
         .await
-        .map_err(DbError::Validation)
+        .map_err(|e| AppCommandError::from(DbError::Validation(e)))?;
+    Ok(())
 }
 
 /// Finish a reviewed task that has nothing to land (review → done, no merge),
 /// optionally removing its worktree. Refused when the worktree turns out to
-/// hold changes after all — that task belongs on the merge path.
-pub async fn work_task_complete_core(id: i32, delete_worktree: bool) -> Result<(), DbError> {
+/// hold changes after all — that task belongs on the merge path. Same
+/// gate-eligibility precondition as merge; a blocked completion stays `review`.
+pub async fn work_task_complete_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    delete_worktree: bool,
+) -> Result<(), AppCommandError> {
+    enforce_gate_eligibility(emitter, db, id).await?;
     engine()?
         .complete_task(id, delete_worktree)
         .await
-        .map_err(DbError::Validation)
+        .map_err(|e| AppCommandError::from(DbError::Validation(e)))?;
+    Ok(())
+}
+
+const QUALITY_GATE_UNMET_I18N: &str = "workTask.qualityGate.unmet";
+const QUALITY_GATE_INVALID_WAIVER_I18N: &str = "workTask.qualityGate.invalidWaiver";
+
+/// Current gate decision for a contract-bound task (`None` for legacy tasks,
+/// which nothing gates). Computed fresh from persisted facts + the current Spec
+/// file hash + the worktree HEAD — never from a cached or client-supplied
+/// result (Feature Spec §5.3, AC05).
+async fn task_gate_decision(
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<Option<WorkTaskGateDecision>, AppCommandError> {
+    if work_task_service::get_contract(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let stale = work_task_spec_staleness_core(db, task_id).await?;
+    let current_head = task_worktree_head(db, task_id).await?;
+    work_task_service::gate_decision(&db.conn, task_id, current_head.as_deref(), stale)
+        .await
+        .map(Some)
+        .map_err(AppCommandError::from)
+}
+
+/// The task worktree's current `HEAD`, when it has one. Used to validate a
+/// reusable preflight result (`verified_head` must still match).
+async fn task_worktree_head(
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<Option<String>, AppCommandError> {
+    let task = work_task_service::get_model(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let Some(wt_id) = task.worktree_folder_id else {
+        return Ok(None);
+    };
+    let wt = get_folder_core(db, wt_id).await.map_err(AppCommandError::from)?;
+    match crate::work_task::git::rev_parse(&wt.path, "HEAD").await {
+        Ok(sha) => Ok(Some(sha)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Reject merge/complete for a contract-bound, reviewed task whose gate
+/// decision is not eligible. Records the block so it is auditable. A task not
+/// in `review` is left to the engine's own status error (no gate block event
+/// for a task that could not have merged anyway).
+async fn enforce_gate_eligibility(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<(), AppCommandError> {
+    let task = work_task_service::get_model(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    if task.status != WorkTaskStatus::Review {
+        return Ok(());
+    }
+    let Some(decision) = task_gate_decision(db, task_id).await? else {
+        return Ok(());
+    };
+    if decision.eligible {
+        return Ok(());
+    }
+    record_gate_blocked_event(db, task_id, &decision).await;
+    emit_event(emitter, WORK_TASK_CHANGED_EVENT, WorkTaskChange::Upsert { id: task_id });
+    Err(gate_block_error(task_id, &decision))
+}
+
+/// Typed merge/complete block: a stale bound Spec reads as
+/// `workTask.specContract.stale`; otherwise `workTask.qualityGate.unmet` with
+/// the unmet gate IDs (Feature Spec §4.3). Both are `TaskExecutionFailed` and
+/// leave the task untouched in `review`.
+fn gate_block_error(task_id: i32, decision: &WorkTaskGateDecision) -> AppCommandError {
+    if decision.stale_spec {
+        return AppCommandError::task_execution_failed(format!(
+            "task {task_id}'s bound spec changed since it was bound — re-preview and rebind"
+        ))
+        .with_i18n(spec_reader::SPEC_CONTRACT_STALE_I18N, {
+            let mut m = BTreeMap::new();
+            m.insert("taskId".to_string(), task_id.to_string());
+            m
+        });
+    }
+    let gates = decision
+        .unmet
+        .iter()
+        .map(|g| g.gate_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    AppCommandError::task_execution_failed(format!(
+        "task {task_id} has unmet quality gates: {gates}"
+    ))
+    .with_i18n(QUALITY_GATE_UNMET_I18N, {
+        let mut m = BTreeMap::new();
+        m.insert("taskId".to_string(), task_id.to_string());
+        m.insert("gates".to_string(), gates);
+        m
+    })
+}
+
+async fn record_gate_blocked_event(
+    db: &AppDatabase,
+    task_id: i32,
+    decision: &WorkTaskGateDecision,
+) {
+    let payload = serde_json::json!({
+        "eligible": decision.eligible,
+        "stale_spec": decision.stale_spec,
+        "unmet": decision.unmet.iter().map(|g| serde_json::json!({
+            "gate_id": g.gate_id,
+            "status": g.status.map(|s| s.as_str()),
+            "reason": g.reason,
+        })).collect::<Vec<_>>(),
+    });
+    let _ = work_task_service::record_event(&db.conn, task_id, "quality_gate_blocked", "user", Some(payload))
+        .await;
+}
+
+/// List persisted gate attempts for a task, optionally scoped to one run.
+pub async fn work_task_gate_list_core(
+    db: &AppDatabase,
+    task_id: i32,
+    run_seq: Option<i32>,
+) -> Result<Vec<WorkTaskGateResultInfo>, DbError> {
+    let rows = work_task_service::list_gate_results(&db.conn, task_id, run_seq).await?;
+    rows.into_iter()
+        .map(work_task_service::gate_result_info)
+        .collect()
+}
+
+/// The current explainable gate decision. Legacy (unbound) tasks are always
+/// eligible.
+pub async fn work_task_gate_decision_core(
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<WorkTaskGateDecision, AppCommandError> {
+    Ok(task_gate_decision(db, task_id)
+        .await?
+        .unwrap_or(WorkTaskGateDecision {
+            eligible: true,
+            stale_spec: false,
+            required: vec![],
+            unmet: vec![],
+            waived: vec![],
+        }))
+}
+
+/// Record a trusted-user gate decision (`approve` → `passed`, `waive` →
+/// `waived`). No generic client-controlled gate-record path exists: the gate
+/// must be in the task's snapshotted policy, `approve` applies only to
+/// `human_approval` gates, `waive` only when `allow_waiver` is true, and actor
+/// is always derived from the authenticated command context (never request
+/// JSON). A reason is required, and a waiver requires a non-empty one.
+pub async fn work_task_gate_human_decide_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    task_id: i32,
+    gate_id: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<WorkTaskGateResultInfo, AppCommandError> {
+    let contract = work_task_service::get_contract(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?
+        .ok_or_else(|| {
+            AppCommandError::invalid_input(format!("task {task_id} has no spec contract"))
+        })?;
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
+        AppCommandError::invalid_input(format!("stored gate policy invalid: {e}"))
+    })?;
+    let gate = policy
+        .gates
+        .iter()
+        .find(|g| g.id == gate_id)
+        .ok_or_else(|| {
+            AppCommandError::invalid_input(format!("gate {gate_id} is not in the task's policy"))
+        })?;
+
+    let reason = reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+    let (status, is_waiver) = match decision.as_str() {
+        "approve" => {
+            if gate.gate_type != WorkTaskGateType::HumanApproval {
+                return Err(AppCommandError::invalid_input(format!(
+                    "gate {gate_id} is engine-owned preflight; only a waiver can be recorded here"
+                )));
+            }
+            (WorkTaskGateStatus::Passed, false)
+        }
+        "waive" => {
+            if !gate.allow_waiver {
+                return Err(AppCommandError::permission_denied(format!(
+                    "gate {gate_id} does not allow waiver"
+                ))
+                .with_i18n(QUALITY_GATE_INVALID_WAIVER_I18N, BTreeMap::new()));
+            }
+            (WorkTaskGateStatus::Waived, true)
+        }
+        other => {
+            return Err(AppCommandError::invalid_input(format!(
+                "unknown gate decision: {other}"
+            )))
+        }
+    };
+    let Some(reason) = reason else {
+        if is_waiver {
+            return Err(AppCommandError::permission_denied(
+                "a waiver requires a non-empty reason",
+            )
+            .with_i18n(QUALITY_GATE_INVALID_WAIVER_I18N, BTreeMap::new()));
+        }
+        return Err(AppCommandError::invalid_input(
+            "a gate decision requires a non-empty reason",
+        ));
+    };
+
+    let task = work_task_service::get_model(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let now = chrono::Utc::now();
+    let txn = db
+        .conn
+        .begin()
+        .await
+        .map_err(|e| AppCommandError::from(DbError::from(e)))?;
+    let model = work_task_gate_result::ActiveModel {
+        id: NotSet,
+        task_id: Set(task_id),
+        run_seq: Set(task.run_seq),
+        gate_id: Set(gate_id.clone()),
+        gate_type: Set(gate.gate_type.as_str().to_string()),
+        status: Set(status.as_str().to_string()),
+        required: Set(gate.required),
+        reusable: Set(gate.reusable),
+        actor: Set("user".to_string()),
+        evidence: Set(None),
+        reason: Set(Some(reason)),
+        started_at: Set(now),
+        finished_at: Set(Some(now)),
+    };
+    let row = work_task_service::insert_gate_result(&txn, model)
+        .await
+        .map_err(AppCommandError::from)?;
+    work_task_service::record_event(
+        &txn,
+        task_id,
+        "gate_result",
+        "user",
+        Some(serde_json::json!({
+            "gate_id": gate_id,
+            "gate_type": gate.gate_type.as_str(),
+            "status": status.as_str(),
+            "decision": decision,
+        })),
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    txn.commit()
+        .await
+        .map_err(|e| AppCommandError::from(DbError::from(e)))?;
+
+    emit_event(emitter, WORK_TASK_CHANGED_EVENT, WorkTaskChange::Upsert { id: task_id });
+    work_task_service::gate_result_info(row).map_err(AppCommandError::from)
 }
 
 /// Archive / unarchive a terminal task (pure DB; no engine needed). Archived
@@ -305,6 +597,201 @@ pub async fn work_task_changed_files_core(
         .await
         .map_err(AppCommandError::from)?;
     crate::work_task::git::diff_numstat(&wt.path, &base).await
+}
+
+// ── SpecOS contract commands (BUGRAIL-SPECOS-001 issue-002) ─────────────────
+
+fn spec_invalid(message: impl Into<String>) -> AppCommandError {
+    AppCommandError::invalid_input(message)
+        .with_i18n(spec_reader::SPEC_CONTRACT_INVALID_I18N, BTreeMap::new())
+}
+
+/// Current Spec file differs from the preview hash / bound hash (stale).
+fn spec_stale(message: impl Into<String>) -> AppCommandError {
+    AppCommandError::task_execution_failed(message)
+        .with_i18n(spec_reader::SPEC_CONTRACT_STALE_I18N, BTreeMap::new())
+}
+
+/// The live project folder a task runs in — the root every repository-relative
+/// Spec path resolves against (Feature Spec §5.1 step 1).
+async fn task_project_root(db: &AppDatabase, task_id: i32) -> Result<PathBuf, AppCommandError> {
+    let task = work_task_service::get_model(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let folder = get_folder_core(db, task.folder_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(PathBuf::from(folder.path))
+}
+
+/// Parse a repository-local Feature Spec and return its exact identity, hash,
+/// and available AC, plus the task's current binding hash (rebind context).
+/// Read-only: never mutates the task or its contract.
+pub async fn work_task_contract_preview_core(
+    db: &AppDatabase,
+    task_id: i32,
+    source_spec_path: String,
+) -> Result<WorkTaskContractPreview, AppCommandError> {
+    let project_root = task_project_root(db, task_id).await?;
+    let spec = spec_reader::read_spec_reference(&project_root, &source_spec_path)?;
+    let current_binding_hash = work_task_service::get_contract(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?
+        .map(|m| m.source_spec_hash);
+    Ok(WorkTaskContractPreview {
+        source_spec_id: spec.id,
+        source_spec_version: spec.version,
+        source_spec_path: spec.path,
+        source_spec_hash: spec.sha256,
+        acceptance_criteria: spec.acceptance_criteria,
+        current_binding_hash,
+    })
+}
+
+/// Bind (or explicitly rebind) a task to the repository-local Feature Spec in
+/// the draft. Validates the canonical path, file size, identity, hash (the
+/// preview's optimistic-concurrency token), selected AC, and gate policy before
+/// any write; then upserts the contract and records a `spec_contract_bound`
+/// timeline event in ONE transaction. A rebind preserves old gate attempts and
+/// records old/new hashes in the timeline (Feature Spec §5.1).
+pub async fn work_task_contract_bind_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    task_id: i32,
+    draft: WorkTaskContractDraft,
+) -> Result<WorkTaskContractInfo, AppCommandError> {
+    let task = work_task_service::get_model(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let existing = work_task_service::get_contract(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?;
+
+    // An explicit rebind may only happen while no execution generation is in
+    // flight: todo / review / failed / canceled. Everything else would let one
+    // generation change its acceptance contract mid-flight (Feature Spec §5.1).
+    if existing.is_some()
+        && !matches!(
+            task.status,
+            WorkTaskStatus::Todo
+                | WorkTaskStatus::Review
+                | WorkTaskStatus::Failed
+                | WorkTaskStatus::Canceled
+        )
+    {
+        return Err(AppCommandError::task_execution_failed(format!(
+            "task {task_id} cannot rebind in state {}",
+            work_task_service::status_str(task.status)
+        )));
+    }
+
+    // Revalidate the file and hash. The hash is the optimistic-concurrency
+    // token from the preview: if the file changed since preview, bind is
+    // rejected and no implicit rebind happens (T07).
+    let project_root = task_project_root(db, task_id).await?;
+    let spec = spec_reader::read_spec_reference(&project_root, &draft.source_spec_path)?;
+    if spec.sha256 != draft.expected_source_spec_hash {
+        return Err(spec_stale(
+            "spec changed since preview; re-preview and retry",
+        ));
+    }
+
+    // Resolve selected AC identifiers server-side; the client never submits AC
+    // text (T08).
+    let by_id: HashMap<&str, &AcceptanceCriterionSnapshot> = spec
+        .acceptance_criteria
+        .iter()
+        .map(|ac| (ac.id.as_str(), ac))
+        .collect();
+    let mut selected = Vec::with_capacity(draft.selected_acceptance_criteria_ids.len());
+    for id in &draft.selected_acceptance_criteria_ids {
+        let ac = by_id.get(id.as_str()).ok_or_else(|| {
+            spec_invalid(format!("unknown acceptance criterion: {id}"))
+        })?;
+        selected.push((*ac).clone());
+    }
+
+    // Gate policy + snapshot limits (T09). `WorkTaskGateType` is exhaustive for
+    // the first slice, so an unsupported type fails to deserialize.
+    gate_decision::validate_gate_policy(&draft.gate_policy).map_err(spec_invalid)?;
+    gate_decision::validate_acceptance_criteria_snapshot(&selected).map_err(spec_invalid)?;
+
+    let now = chrono::Utc::now();
+    let txn = db
+        .conn
+        .begin()
+        .await
+        .map_err(|e| AppCommandError::from(DbError::from(e)))?;
+    let model = work_task_contract::ActiveModel {
+        task_id: Set(task_id),
+        source_spec_id: Set(spec.id.clone()),
+        source_spec_version: Set(spec.version.clone()),
+        source_spec_path: Set(spec.path.clone()),
+        source_spec_hash: Set(spec.sha256.clone()),
+        acceptance_criteria: Set(serde_json::to_string(&selected).map_err(|e| {
+            AppCommandError::invalid_input("serialize acceptance criteria").with_detail(e.to_string())
+        })?),
+        gate_policy: Set(serde_json::to_string(&draft.gate_policy).map_err(|e| {
+            AppCommandError::invalid_input("serialize gate policy").with_detail(e.to_string())
+        })?),
+        // A rebind keeps the original creation time; only the reference moves.
+        created_at: Set(existing.as_ref().map(|m| m.created_at).unwrap_or(now)),
+        updated_at: Set(now),
+    };
+    work_task_service::upsert_contract(&txn, model)
+        .await
+        .map_err(AppCommandError::from)?;
+
+    let mut payload = serde_json::json!({
+        "source_spec_id": spec.id,
+        "source_spec_version": spec.version,
+        "source_spec_hash": spec.sha256,
+    });
+    if let Some(old) = existing.as_ref() {
+        payload["rebind"] = serde_json::json!(true);
+        payload["previous_source_spec_hash"] = serde_json::json!(old.source_spec_hash);
+    }
+    work_task_service::record_event(&txn, task_id, "spec_contract_bound", "user", Some(payload))
+        .await
+        .map_err(AppCommandError::from)?;
+    txn.commit()
+        .await
+        .map_err(|e| AppCommandError::from(DbError::from(e)))?;
+
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id: task_id },
+    );
+
+    work_task_service::contract_get(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?
+        .ok_or_else(|| AppCommandError::not_found(format!("contract for task {task_id}")))
+}
+
+/// Read a task's stored contract (`None` for legacy/unbound tasks).
+pub async fn work_task_contract_get_core(
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<Option<WorkTaskContractInfo>, DbError> {
+    work_task_service::contract_get(&db.conn, task_id).await
+}
+
+/// Whether the bound Spec file still hashes to the bound hash. Internal helper
+/// feeding the merge/complete decision (issue-003); not a public command.
+pub async fn work_task_spec_staleness_core(
+    db: &AppDatabase,
+    task_id: i32,
+) -> Result<bool, AppCommandError> {
+    let Some(contract) = work_task_service::get_contract(&db.conn, task_id)
+        .await
+        .map_err(AppCommandError::from)?
+    else {
+        return Ok(false);
+    };
+    let project_root = task_project_root(db, task_id).await?;
+    spec_reader::spec_stale(&project_root, &contract.source_spec_path, &contract.source_spec_hash)
 }
 
 pub async fn work_task_settings_get_core(
@@ -518,17 +1005,64 @@ pub async fn work_task_cancel(id: i32, reason: Option<String>) -> Result<(), DbE
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_merge(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
     id: i32,
     message: Option<String>,
     delete_worktree: bool,
-) -> Result<(), DbError> {
-    work_task_merge_core(id, message, delete_worktree).await
+) -> Result<(), AppCommandError> {
+    work_task_merge_core(&EventEmitter::Tauri(app), &db, id, message, delete_worktree).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn work_task_complete(id: i32, delete_worktree: bool) -> Result<(), DbError> {
-    work_task_complete_core(id, delete_worktree).await
+pub async fn work_task_complete(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    delete_worktree: bool,
+) -> Result<(), AppCommandError> {
+    work_task_complete_core(&EventEmitter::Tauri(app), &db, id, delete_worktree).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_gate_list(
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+    run_seq: Option<i32>,
+) -> Result<Vec<WorkTaskGateResultInfo>, DbError> {
+    work_task_gate_list_core(&db, task_id, run_seq).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_gate_decision(
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+) -> Result<WorkTaskGateDecision, AppCommandError> {
+    work_task_gate_decision_core(&db, task_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_gate_human_decide(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+    gate_id: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<WorkTaskGateResultInfo, AppCommandError> {
+    work_task_gate_human_decide_core(
+        &EventEmitter::Tauri(app),
+        &db,
+        task_id,
+        gate_id,
+        decision,
+        reason,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -639,4 +1173,34 @@ pub async fn work_task_template_delete(
     id: i32,
 ) -> Result<(), DbError> {
     work_task_template_delete_core(&db, id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_contract_preview(
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+    source_spec_path: String,
+) -> Result<WorkTaskContractPreview, AppCommandError> {
+    work_task_contract_preview_core(&db, task_id, source_spec_path).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_contract_bind(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+    draft: WorkTaskContractDraft,
+) -> Result<WorkTaskContractInfo, AppCommandError> {
+    work_task_contract_bind_core(&EventEmitter::Tauri(app), &db, task_id, draft).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_contract_get(
+    db: tauri::State<'_, AppDatabase>,
+    task_id: i32,
+) -> Result<Option<WorkTaskContractInfo>, DbError> {
+    work_task_contract_get_core(&db, task_id).await
 }

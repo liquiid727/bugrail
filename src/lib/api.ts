@@ -24,6 +24,11 @@ import type {
   WorkTaskConfig,
   WorkTaskDraft,
   WorkTaskEvent,
+  WorkTaskContract,
+  WorkTaskContractDraft,
+  WorkTaskContractPreview,
+  WorkTaskGateDecision,
+  WorkTaskGateResult,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
   ConversationSummary,
@@ -3013,6 +3018,65 @@ export async function workTaskTemplateSave(draft: {
 
 export async function workTaskTemplateDelete(id: number): Promise<void> {
   return getTransport().call("work_task_template_delete", { id })
+}
+
+/** Parse a repository-local Feature Spec; read-only, no binding is stored. */
+export async function workTaskContractPreview(
+  taskId: number,
+  sourceSpecPath: string
+): Promise<WorkTaskContractPreview> {
+  return getTransport().call("work_task_contract_preview", {
+    taskId,
+    sourceSpecPath,
+  })
+}
+
+/** Bind (or explicitly rebind) a task to the previewed Feature Spec. */
+export async function workTaskContractBind(
+  taskId: number,
+  draft: WorkTaskContractDraft
+): Promise<WorkTaskContract> {
+  return getTransport().call("work_task_contract_bind", { taskId, draft })
+}
+
+/** Read the stored contract; `null` for legacy/unbound tasks. */
+export async function workTaskContractGet(
+  taskId: number
+): Promise<WorkTaskContract | null> {
+  return getTransport().call("work_task_contract_get", { taskId })
+}
+
+/** Persisted gate attempts for a task (append-only), optionally scoped to one run. */
+export async function workTaskGateList(
+  taskId: number,
+  runSeq?: number | null
+): Promise<WorkTaskGateResult[]> {
+  return getTransport().call("work_task_gate_list", {
+    taskId,
+    runSeq: runSeq ?? null,
+  })
+}
+
+/** The current explainable merge/complete gate decision. */
+export async function workTaskGateDecision(
+  taskId: number
+): Promise<WorkTaskGateDecision> {
+  return getTransport().call("work_task_gate_decision", { taskId })
+}
+
+/** Record a trusted-user gate decision: `approve` or `waive` + non-empty reason. */
+export async function workTaskGateHumanDecide(
+  taskId: number,
+  gateId: string,
+  decision: "approve" | "waive",
+  reason: string
+): Promise<WorkTaskGateResult> {
+  return getTransport().call("work_task_gate_human_decide", {
+    taskId,
+    gateId,
+    decision,
+    reason,
+  })
 }
 
 // Directory browser (for web/server mode)

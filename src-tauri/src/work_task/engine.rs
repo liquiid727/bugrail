@@ -43,8 +43,8 @@ use crate::db::service::{conversation_service, tab_service, work_task_service};
 use crate::db::AppDatabase;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
-    AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeState,
-    WorkTaskPreflight, STAGE_PROMPT_ALL,
+    AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskGateStatus,
+    WorkTaskMergeState, WorkTaskPreflight, STAGE_PROMPT_ALL,
 };
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
@@ -157,6 +157,39 @@ pub fn build_task_engine(
     });
     let _ = ENGINE.set(engine.clone());
     Some(engine)
+}
+
+/// Test-only engine constructor. Builds a fully-wired `TaskEngine` over the
+/// given DB and emitter WITHOUT publishing it to the process global, so a test
+/// can drive `run_preflight` in isolation while every other test in the binary
+/// still observes `engine() == None` (the "engine not running" command path).
+#[cfg(feature = "test-utils")]
+pub fn new_for_test(db: AppDatabase, emitter: EventEmitter, data_dir: PathBuf) -> Arc<TaskEngine> {
+    let lock_path = data_dir.join("test-engine.tasks.lock");
+    let _engine_lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .expect("open test engine lock");
+    let metrics = Arc::new(crate::acp::EventBusMetrics::default());
+    Arc::new(TaskEngine {
+        db,
+        manager: crate::app_state::default_connection_manager(),
+        emitter,
+        bus: Arc::new(crate::acp::InternalEventBus::new(metrics)),
+        data_dir,
+        index: Arc::new(Mutex::new(HashMap::new())),
+        awaiting: Arc::new(Mutex::new(HashMap::new())),
+        launching: Arc::new(Mutex::new(HashMap::new())),
+        launch_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        setup_children: Arc::new(Mutex::new(HashMap::new())),
+        merging: Arc::new(Mutex::new(HashSet::new())),
+        task_locks: Arc::new(Mutex::new(HashMap::new())),
+        folder_locks: Arc::new(Mutex::new(HashMap::new())),
+        pump_locks: Arc::new(Mutex::new(HashMap::new())),
+        _engine_lock,
+    })
 }
 
 enum Ownership {
@@ -1484,7 +1517,7 @@ impl TaskEngine {
         });
     }
 
-    async fn run_preflight(&self, task_id: i32, run_seq: i32) {
+    pub async fn run_preflight(&self, task_id: i32, run_seq: i32) {
         let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
             return;
         };
@@ -1502,6 +1535,19 @@ impl TaskEngine {
             Some(cmd) => (cmd.to_string(), cmd.to_string()),
             None => {
                 let Some(command_id) = settings.preflight_command_id else {
+                    // No configured producer. A contract-bound task with a
+                    // required preflight gate is recorded `blocked` with
+                    // `producer_unavailable` (Feature Spec §5.2); legacy tasks
+                    // keep the silent no-op.
+                    let _ = work_task_service::record_preflight_gates(
+                        &self.db.conn,
+                        task_id,
+                        run_seq,
+                        WorkTaskGateStatus::Blocked,
+                        Some("producer_unavailable".to_string()),
+                        None,
+                    )
+                    .await;
                     return;
                 };
                 let Ok(Some(command)) = folder_command::Entity::find_by_id(command_id)
@@ -1526,9 +1572,23 @@ impl TaskEngine {
             return;
         }
 
+        // Contract-bound tasks carry structured preflight gate rows (issue-003).
+        // The worktree HEAD is captured up front so a reusable passing result
+        // can later be validated against the current HEAD (Feature Spec §5.2).
+        let verified_head = task_git::rev_parse(&wt.path, "HEAD").await.ok();
+        let _ = work_task_service::record_preflight_gates(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            WorkTaskGateStatus::Running,
+            None,
+            None,
+        )
+        .await;
+
         let mut light = WorkTaskPreflight {
             status: "running".to_string(),
-            command: display_name,
+            command: display_name.clone(),
             exit_code: None,
             output_tail: None,
         };
@@ -1556,6 +1616,37 @@ impl TaskEngine {
         {
             self.emit_upsert(task_id);
         }
+
+        // Terminal preflight gate rows with the capped evidence. A failed run
+        // carries the output tail as its required reason.
+        let passed = light.status == "passed";
+        let mut evidence = serde_json::Map::new();
+        evidence.insert(
+            "command".to_string(),
+            serde_json::Value::String(display_name),
+        );
+        if let Some(code) = light.exit_code {
+            evidence.insert("exit_code".to_string(), serde_json::Value::from(code));
+        }
+        if let Some(tail) = light.output_tail.clone() {
+            evidence.insert("output_tail".to_string(), serde_json::Value::String(tail));
+        }
+        if let Some(head) = verified_head {
+            evidence.insert("verified_head".to_string(), serde_json::Value::String(head));
+        }
+        let _ = work_task_service::record_preflight_gates(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            if passed {
+                WorkTaskGateStatus::Passed
+            } else {
+                WorkTaskGateStatus::Failed
+            },
+            if passed { None } else { light.output_tail.clone() },
+            Some(serde_json::Value::Object(evidence)),
+        )
+        .await;
     }
 
     /// Best-effort diff-stat snapshot of the task worktree vs its base.

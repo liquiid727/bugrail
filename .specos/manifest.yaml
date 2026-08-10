@@ -1,0 +1,28 @@
+project:
+  name: code-bugrail
+  type: fullstack
+projectMode: goalspec
+stacks:
+  frontend: next
+  backend: rust-tauri-axum
+artifacts:
+  draftsDir: .prd
+  specsDir: .features
+  issuesDir: .issues
+  testsDir: tests
+  resultsDir: tests/results
+rulePacks:
+  - spec-driven-delivery
+agentTemplates:
+  - product-architect-agent
+  - spec-editor
+  - frontend-agent
+  - backend-agent
+  - testing-agent
+  - qa-agent
+  - ci-editor
+  - reviewer
+workflows:
+  - default-fullstack
+ci:
+  checkCommand: pnpm test

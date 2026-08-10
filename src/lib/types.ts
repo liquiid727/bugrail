@@ -1397,6 +1397,114 @@ export interface WorkTaskChangedFile {
   deletions: number
 }
 
+// --- SpecOS contract & gate types (mirror of src-tauri/src/models/work_task.rs) ---
+
+/** Gate types supported by the first SpecOS slice. `preflight` is engine-owned;
+ *  `human_approval` is trusted-user only. */
+export type WorkTaskGateType = "preflight" | "human_approval"
+
+export type WorkTaskGateStatus =
+  | "running"
+  | "passed"
+  | "failed"
+  | "blocked"
+  | "waived"
+
+/** One gate in a snapshotted policy. The wire field is `type`. */
+export interface GateRequirement {
+  id: string
+  type: WorkTaskGateType
+  required: boolean
+  /** A passing preflight may be reused across runs only while its evidence
+   *  `verified_head` matches the current Worktree HEAD and the bound Spec hash
+   *  is unchanged. `human_approval` must be non-reusable. */
+  reusable: boolean
+  allow_waiver: boolean
+}
+
+export interface WorkTaskGatePolicy {
+  gates: GateRequirement[]
+}
+
+/** One acceptance criterion of a Feature Spec. The client selects by `id`;
+ *  text is always resolved server-side. */
+export interface AcceptanceCriterionSnapshot {
+  id: string
+  title: string
+  text: string
+}
+
+/** Preview result of a repository-local Feature Spec path. */
+export interface WorkTaskContractPreview {
+  source_spec_id: string
+  source_spec_version: string
+  source_spec_path: string
+  source_spec_hash: string
+  acceptance_criteria: AcceptanceCriterionSnapshot[]
+  /** Hash of the task's current binding, when already contracted (rebind). */
+  current_binding_hash: string | null
+}
+
+/** Bind/rebind payload. `expected_source_spec_hash` is the optimistic-
+ *  concurrency token returned by the preview. Never carries an actor field. */
+export interface WorkTaskContractDraft {
+  source_spec_path: string
+  expected_source_spec_hash: string
+  selected_acceptance_criteria_ids: string[]
+  gate_policy: WorkTaskGatePolicy
+}
+
+/** Stored contract of a bound task. */
+export interface WorkTaskContract {
+  task_id: number
+  source_spec_id: string
+  source_spec_version: string
+  source_spec_path: string
+  source_spec_hash: string
+  acceptance_criteria: AcceptanceCriterionSnapshot[]
+  gate_policy: WorkTaskGatePolicy
+  created_at: string
+  updated_at: string
+}
+
+/** One persisted gate attempt. */
+export interface WorkTaskGateResult {
+  id: number
+  task_id: number
+  run_seq: number
+  gate_id: string
+  gate_type: WorkTaskGateType
+  status: WorkTaskGateStatus
+  required: boolean
+  reusable: boolean
+  actor: string
+  /** JSON references and capped summaries — never secrets/full output. */
+  evidence: Record<string, unknown> | null
+  reason: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+/** One required gate in a computed decision. */
+export interface GateDecisionItem {
+  gate_id: string
+  gate_type: WorkTaskGateType
+  /** Latest attempt status; null when there is no applicable attempt. */
+  status: WorkTaskGateStatus | null
+  /** Explainable reason; the client maps it to `Tasks.specos.*` copy. */
+  reason: string
+}
+
+/** Explainable merge/complete eligibility computed from persisted facts. The
+ *  backend is authoritative; the frontend renders it but never computes it. */
+export interface WorkTaskGateDecision {
+  eligible: boolean
+  stale_spec: boolean
+  required: GateDecisionItem[]
+  unmet: GateDecisionItem[]
+  waived: GateDecisionItem[]
+}
+
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
 export type TokenUsageBucket = "day" | "week" | "month"
