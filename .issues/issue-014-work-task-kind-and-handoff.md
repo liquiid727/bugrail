@@ -1,11 +1,13 @@
 ---
 id: issue-014
 title: "Add WorkTask kinds and trusted structured handoffs"
-status: draft
+status: superseded
 kind: implementation
 type: backend
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-004
+replacementSpecId: BUGRAIL-SPECOS-005
+supersededBy: [issue-050, issue-051]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "3ac469030262845856bb116d99471d871c13c885eb72ed60e2803e1636f32afd"
 requirements: [BUGRAIL-SPECOS-004.R01, BUGRAIL-SPECOS-004.R02]

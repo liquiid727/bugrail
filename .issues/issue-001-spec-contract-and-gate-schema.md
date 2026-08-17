@@ -1,7 +1,7 @@
 ---
 id: issue-001
 title: "Add WorkTask contract and gate persistence"
-status: draft
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"

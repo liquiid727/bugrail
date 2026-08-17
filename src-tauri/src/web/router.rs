@@ -1325,6 +1325,75 @@ pub fn build_router(
             "/work_task_changed_files",
             post(handlers::work_task::work_task_changed_files),
         )
+        // ─── SpecOS Agent Team + Context ───
+        .route(
+            "/specos_agent_catalog_get",
+            post(handlers::specos_control::agent_get),
+        )
+        .route(
+            "/specos_agent_catalog_save",
+            post(handlers::specos_control::agent_save),
+        )
+        .route(
+            "/specos_team_catalog_get",
+            post(handlers::specos_control::team_get),
+        )
+        .route(
+            "/specos_team_catalog_save",
+            post(handlers::specos_control::team_save),
+        )
+        .route(
+            "/specos_team_run_list",
+            post(handlers::specos_control::team_run_list),
+        )
+        .route(
+            "/specos_team_run_start",
+            post(handlers::specos_control::team_run_start),
+        )
+        .route(
+            "/specos_team_run_control",
+            post(handlers::specos_control::team_run_control),
+        )
+        .route(
+            "/specos_context_config_get",
+            post(handlers::specos_control::context_get),
+        )
+        .route(
+            "/specos_context_config_save",
+            post(handlers::specos_control::context_save),
+        )
+        .route(
+            "/specos_context_overview",
+            post(handlers::specos_control::context_overview),
+        )
+        .route(
+            "/specos_context_package_get",
+            post(handlers::specos_control::context_package_get),
+        )
+        .route(
+            "/specos_work_task_runs",
+            post(handlers::specos_control::task_runs),
+        )
+        .route(
+            "/specos_work_task_dependencies",
+            post(handlers::specos_control::task_dependencies),
+        )
+        .route(
+            "/specos_work_task_handoff_get",
+            post(handlers::specos_control::handoff_get),
+        )
+        .route(
+            "/specos_work_task_handoff_save",
+            post(handlers::specos_control::handoff_save),
+        )
+        .route(
+            "/specos_work_task_integration_plan",
+            post(handlers::specos_control::integration_plan),
+        )
+        .route(
+            "/specos_work_task_integration_refresh",
+            post(handlers::specos_control::integration_refresh),
+        )
         .route(
             "/work_task_settings_get",
             post(handlers::work_task::work_task_settings_get),

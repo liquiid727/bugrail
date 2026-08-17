@@ -1,11 +1,13 @@
 ---
 id: issue-018
 title: "Build the deterministic and secure Context Pack compiler"
-status: draft
+status: superseded
 kind: implementation
 type: backend
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-005
+replacementSpecId: BUGRAIL-SPECOS-006
+supersededBy: [issue-052, issue-053]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "1491551bf38d5e1a56a932986c45604f97a5325ff41dbf05634a4000876993c2"
 requirements: [BUGRAIL-SPECOS-005.R01, BUGRAIL-SPECOS-005.R02, BUGRAIL-SPECOS-005.R03]

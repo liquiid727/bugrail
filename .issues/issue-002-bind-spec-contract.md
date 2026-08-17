@@ -1,7 +1,7 @@
 ---
 id: issue-002
 title: "Bind and validate a Feature Spec on WorkTask"
-status: draft
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"

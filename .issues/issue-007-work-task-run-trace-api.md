@@ -1,11 +1,13 @@
 ---
 id: issue-007
 title: "Project and expose bounded WorkTask run traces"
-status: draft
+status: superseded
 kind: implementation
 type: fullstack
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-002
+replacementSpecId: BUGRAIL-SPECOS-003
+supersededBy: [issue-046, issue-047]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "4d2c623f35a9caea2d66aee7f716bb8ca41c451a1c1d33b92c763e6dcda87965"
 requirements: [BUGRAIL-SPECOS-002.R03, BUGRAIL-SPECOS-002.R04]

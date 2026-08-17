@@ -1,11 +1,13 @@
 ---
 id: issue-023
 title: "Integrate impact snapshots with cache, Context Pack, and transports"
-status: draft
+status: superseded
 kind: implementation
 type: fullstack
 priority: medium
 sourceSpecId: BUGRAIL-SPECOS-006
+replacementSpecId: BUGRAIL-SPECOS-010
+supersededBy: [issue-061, issue-062]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "ad1ac57268e3fed82c35e8c7f3b57eda1e29fca753eb6b2ad747e328ffe223f5"
 requirements: [BUGRAIL-SPECOS-006.R04, BUGRAIL-SPECOS-006.R05]

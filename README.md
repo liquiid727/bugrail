@@ -14,6 +14,16 @@ The current bootstrap tracks CodeG release `v0.24.0`. Upstream documentation
 and feature descriptions below remain useful for inherited behavior; Bugrail
 changes are maintained in this fork and released independently.
 
+Local development is a sibling checkout next to SpecOS:
+
+```text
+~/code/specos-ai/     # SpecOS platform
+~/code/bugrail/       # this repository
+```
+
+Use `make init` then `make dev` from this directory. Do not re-nest this tree
+inside SpecOS.
+
 <p>
   <strong>English</strong> |
   <a href="./docs/readme/README.zh-CN.md">简体中文</a> |

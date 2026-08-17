@@ -1,11 +1,13 @@
 ---
 id: issue-022
 title: "Build bounded repository impact analysis and language adapters"
-status: draft
+status: superseded
 kind: implementation
 type: backend
 priority: medium
 sourceSpecId: BUGRAIL-SPECOS-006
+replacementSpecId: BUGRAIL-SPECOS-010
+supersededBy: [issue-061, issue-062]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "ad1ac57268e3fed82c35e8c7f3b57eda1e29fca753eb6b2ad747e328ffe223f5"
 requirements: [BUGRAIL-SPECOS-006.R01, BUGRAIL-SPECOS-006.R02, BUGRAIL-SPECOS-006.R03, BUGRAIL-SPECOS-006.R04]

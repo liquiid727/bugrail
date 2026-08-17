@@ -31,6 +31,17 @@ import type {
   WorkTaskGateResult,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
+  AgentCatalog,
+  TeamCatalog,
+  TeamRunInfo,
+  ContextConfig,
+  ContextOverview,
+  ContextPackageInfo,
+  WorkTaskRunInfo,
+  WorkTaskDependencyInfo,
+  WorkTaskHandoffDraft,
+  WorkTaskHandoffInfo,
+  IntegrationPlan,
   ConversationSummary,
   ConversationDetail,
   ConversationTurnsPage,
@@ -3244,6 +3255,122 @@ export async function workTaskGateHumanDecide(
     gateId,
     decision,
     reason,
+  })
+}
+
+// SpecOS Agent Team + Context
+
+export async function specosAgentCatalogGet(
+  folderId: number
+): Promise<AgentCatalog> {
+  return getTransport().call("specos_agent_catalog_get", { folderId })
+}
+
+export async function specosAgentCatalogSave(
+  folderId: number,
+  catalog: AgentCatalog
+): Promise<AgentCatalog> {
+  return getTransport().call("specos_agent_catalog_save", { folderId, catalog })
+}
+
+export async function specosTeamCatalogGet(
+  folderId: number
+): Promise<TeamCatalog> {
+  return getTransport().call("specos_team_catalog_get", { folderId })
+}
+
+export async function specosTeamCatalogSave(
+  folderId: number,
+  catalog: TeamCatalog
+): Promise<TeamCatalog> {
+  return getTransport().call("specos_team_catalog_save", { folderId, catalog })
+}
+
+export async function specosTeamRunList(
+  folderId: number
+): Promise<TeamRunInfo[]> {
+  return getTransport().call("specos_team_run_list", { folderId })
+}
+
+export async function specosTeamRunStart(
+  folderId: number,
+  workflowId: string
+): Promise<TeamRunInfo> {
+  return getTransport().call("specos_team_run_start", { folderId, workflowId })
+}
+
+export async function specosTeamRunControl(
+  runId: string,
+  action: "pause" | "resume" | "cancel"
+): Promise<void> {
+  return getTransport().call("specos_team_run_control", { runId, action })
+}
+
+export async function specosContextConfigGet(
+  folderId: number
+): Promise<ContextConfig> {
+  return getTransport().call("specos_context_config_get", { folderId })
+}
+
+export async function specosContextConfigSave(
+  folderId: number,
+  config: ContextConfig
+): Promise<ContextConfig> {
+  return getTransport().call("specos_context_config_save", { folderId, config })
+}
+
+export async function specosContextOverview(
+  folderId: number
+): Promise<ContextOverview> {
+  return getTransport().call("specos_context_overview", { folderId })
+}
+
+export async function specosContextPackageGet(
+  id: string
+): Promise<ContextPackageInfo> {
+  return getTransport().call("specos_context_package_get", { id })
+}
+
+export async function specosWorkTaskRuns(
+  taskId: number
+): Promise<WorkTaskRunInfo[]> {
+  return getTransport().call("specos_work_task_runs", { taskId })
+}
+
+export async function specosWorkTaskDependencies(
+  taskId: number
+): Promise<WorkTaskDependencyInfo[]> {
+  return getTransport().call("specos_work_task_dependencies", { taskId })
+}
+
+export async function specosWorkTaskHandoffGet(
+  taskId: number,
+  runSeq?: number | null
+): Promise<WorkTaskHandoffInfo | null> {
+  return getTransport().call("specos_work_task_handoff_get", {
+    taskId,
+    runSeq: runSeq ?? null,
+  })
+}
+
+export async function specosWorkTaskHandoffSave(
+  taskId: number,
+  draft: WorkTaskHandoffDraft
+): Promise<WorkTaskHandoffInfo> {
+  return getTransport().call("specos_work_task_handoff_save", { taskId, draft })
+}
+
+export async function specosWorkTaskIntegrationPlan(
+  taskId: number
+): Promise<IntegrationPlan> {
+  return getTransport().call("specos_work_task_integration_plan", { taskId })
+}
+
+export async function specosWorkTaskIntegrationRefresh(
+  taskId: number
+): Promise<IntegrationPlan> {
+  return getTransport().call("specos_work_task_integration_refresh", {
+    taskId,
   })
 }
 

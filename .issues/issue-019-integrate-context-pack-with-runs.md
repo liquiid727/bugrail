@@ -1,11 +1,13 @@
 ---
 id: issue-019
 title: "Persist and consume Context Packs in WorkTask runs"
-status: draft
+status: superseded
 kind: implementation
 type: fullstack
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-005
+replacementSpecId: BUGRAIL-SPECOS-006
+supersededBy: [issue-052, issue-053]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "1491551bf38d5e1a56a932986c45604f97a5325ff41dbf05634a4000876993c2"
 requirements: [BUGRAIL-SPECOS-005.R04, BUGRAIL-SPECOS-005.R05]

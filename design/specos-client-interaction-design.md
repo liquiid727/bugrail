@@ -4,12 +4,12 @@
 
 - Product: `Code: BugRail`
 - Status: proposed
-- Date: `2026-08-09`
-- Product requirements: `.prd/prd-specos-delivery-control.md`
+- Date: `2026-08-12`
+- Product requirements: `.prd/prd-specos-agent-team-context-system.md`
 - System design: `design/specos-control-plane-design.md`
 - Existing UI baseline: `src/components/tasks/`, `src/lib/api.ts`,
   `src/lib/types.ts`, `src/components/workbench/workbench-content.tsx`
-- Applies to: `BUGRAIL-SPECOS-001` through `BUGRAIL-SPECOS-010`
+- Applies to: `BUGRAIL-SPECOS-001` through `BUGRAIL-SPECOS-016`
 
 ## 1. Purpose
 
@@ -24,6 +24,8 @@ The client must let a person answer, without reading SQLite or logs:
 3. What happened in each run, with which Agent/model/context and evidence?
 4. How do tasks depend on and integrate with one another?
 5. What evaluation, memory, or Skill proposal was derived, and who approved it?
+6. Which expert profile and model were resolved for each Team node?
+7. Which Context Package was injected, why, and what degraded or blocked it?
 
 ## 2. Existing Surface Is The Product Shell
 
@@ -114,6 +116,22 @@ Capabilities appear progressively. A tab is hidden until its Feature is
 available for the selected project; it must not show fabricated placeholder
 data. Missing facts inside an available Feature use explicit empty/legacy
 states.
+
+### 4.2 Team And Context Routes
+
+`Teams` and `Context` are first-level workbench routes beside `Tasks`.
+
+- Teams combines project Agent/Model configuration, static Team/Workflow
+  editing, an accessible DAG list, and current Team run controls. It covers no
+  workspace, loading, empty/starter, invalid definition, running, paused,
+  partially failed, canceled, completed, stale data, and transport failure.
+- Context combines Provider health, loadout/source budgets, recent immutable
+  packages, provenance, and activity. It covers empty, healthy, degraded,
+  required-provider blocked, stale, loading, and transport failure.
+- Task Detail provides the local join: Contract/Gates, Runs/Dependencies,
+  Context Package, and Handoff. Backend decisions remain authoritative.
+- Last good persisted content may remain on screen during a refresh error, but
+  the stale/degraded banner and retry action must be explicit.
 
 ### 4.1 Reviewable Screen Blueprints
 

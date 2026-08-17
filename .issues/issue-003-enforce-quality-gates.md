@@ -1,7 +1,7 @@
 ---
 id: issue-003
 title: "Enforce gate decisions in WorkTask merge and completion"
-status: draft
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"

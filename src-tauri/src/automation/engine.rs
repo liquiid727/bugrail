@@ -379,9 +379,15 @@ impl AutomationEngine {
             prompt_blocks: cfg.prompt_blocks.clone(),
             display_text: cfg.display_text.clone(),
             agent_type: Some(auto.agent_type.clone()),
+            agent_profile_id: None,
+            model_profile_id: None,
+            context_loadout_id: None,
+            team_run_id: None,
+            team_node_id: None,
             mode_id: cfg.mode_id.clone(),
             config_values: cfg.config_values.clone(),
             label_snapshot: cfg.label_snapshot.clone(),
+            integration_snapshot: None,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,

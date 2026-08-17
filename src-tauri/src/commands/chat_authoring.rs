@@ -325,9 +325,15 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             prompt_blocks,
             display_text: spec.prompt.clone(),
             agent_type: agent.map(|a| a.as_wire().into_owned()),
+            agent_profile_id: None,
+            model_profile_id: None,
+            context_loadout_id: None,
+            team_run_id: None,
+            team_node_id: None,
             mode_id: None,
             config_values: BTreeMap::new(),
             label_snapshot: None,
+            integration_snapshot: None,
         };
         let config = match serde_json::to_value(&config) {
             Ok(v) => v,

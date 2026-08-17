@@ -1,11 +1,13 @@
 ---
 id: issue-042
 title: "Security-review and verify controlled Skill candidates"
-status: draft
+status: superseded
 kind: verification
 type: fullstack
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-010
+replacementSpecId: BUGRAIL-SPECOS-014
+supersededBy: [issue-069, issue-070]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "56d98d38608e6058a1a622ec4b8875c0d1a68d657e306f1f4d16388eb2321b12"
 requirements: [BUGRAIL-SPECOS-010.R01, BUGRAIL-SPECOS-010.R02, BUGRAIL-SPECOS-010.R03, BUGRAIL-SPECOS-010.R04, BUGRAIL-SPECOS-010.R05]

@@ -1,5 +1,10 @@
 # PRD: SpecOS Delivery Control In Code: BugRail
 
+> Superseded on 2026-08-12 by
+> `.prd/prd-specos-agent-team-context-system.md`. This document remains as the
+> requirement-history baseline for `BUGRAIL-SPECOS-001`; later slices use the
+> replacement PRD and the renumbering map recorded there.
+
 ## Meta
 
 - Status: draft

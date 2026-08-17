@@ -85,12 +85,24 @@ async fn down_drops_only_the_specos_tables() {
         .await
         .unwrap();
 
-    // Revert exactly this migration (it is the newest).
-    Migrator::down(&db.conn, Some(1)).await.expect("down migration");
+    // Revert the Agent/Team/Context migration and then this contract migration.
+    Migrator::down(&db.conn, Some(2)).await.expect("down migrations");
 
     let names = table_names(&db).await;
     assert!(!names.contains(&"work_task_contract".to_string()));
     assert!(!names.contains(&"work_task_gate_result".to_string()));
+    for name in [
+        "work_task_run",
+        "work_task_dependency",
+        "work_task_handoff",
+        "team_run",
+        "team_run_task",
+        "work_task_context_pack",
+        "work_task_context_item",
+        "context_activity",
+    ] {
+        assert!(!names.contains(&name.to_string()), "{name} must roll back");
+    }
     assert!(names.contains(&"work_task".to_string()));
 
     // The legacy task row is still readable after the rollback.

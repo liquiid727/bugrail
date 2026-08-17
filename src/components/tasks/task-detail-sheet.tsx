@@ -71,6 +71,7 @@ import {
   TaskMessageComposer,
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
+import { TaskTraceabilityPanel } from "./specos/task-traceability-panel"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -898,6 +899,8 @@ export function TaskDetailSheet({
                   ) : null}
                 </section>
               ) : null}
+
+              <TaskTraceabilityPanel task={task} />
 
               {/* Key-value facts: git coordinates, change size, lifecycle. */}
               <section className="flex flex-col gap-1.5">

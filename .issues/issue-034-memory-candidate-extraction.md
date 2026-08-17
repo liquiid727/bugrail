@@ -1,11 +1,13 @@
 ---
 id: issue-034
 title: "Extract and govern project memory candidates"
-status: draft
+status: superseded
 kind: implementation
 type: backend
 priority: medium
 sourceSpecId: BUGRAIL-SPECOS-009
+replacementSpecId: BUGRAIL-SPECOS-013
+supersededBy: [issue-067, issue-068]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "aacf54806b70b677616eae03a697cebffc70c663e04d1a2806acac882745e0bd"
 requirements: [BUGRAIL-SPECOS-009.R01, BUGRAIL-SPECOS-009.R02, BUGRAIL-SPECOS-009.R05]

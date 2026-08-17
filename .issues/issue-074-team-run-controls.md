@@ -1,0 +1,32 @@
+---
+id: issue-074
+title: "Team run pause, resume and cancel"
+status: implemented_pending_verification
+kind: implementation
+sourceSpecId: BUGRAIL-SPECOS-016
+sourceSpecVersion: "0.1"
+sourceSpecHash: "67a4fcb4682ca22c2994c7114376887e9e15a12c6b8daf54137ba051a47e7517"
+requirements: [BUGRAIL-SPECOS-016.R01]
+dependsOn: [issue-072]
+---
+
+# Team run pause, resume and cancel
+
+## Outcome
+
+Persist Team control state; pause new claims, resume pumping, and delegate cancellation to existing WorkTask core.
+
+## Scope
+
+Ensure active WorkTasks retain normal semantics and all outcomes reconstruct after restart.
+
+## Acceptance And Verification
+
+- Preserve the existing WorkTask, ACP, Session, Worktree, Git and transport
+  invariants named by the source Feature Spec.
+- Cover happy, error, edge, restart/concurrency, security and legacy behavior.
+- For frontend scope, cover no-workspace, loading, empty, success, degraded or
+  blocked, stale and transport-error states without deriving backend authority.
+- Record exact commands and durable evidence before changing this Issue to
+  verified; implementation status alone does not satisfy the source Test Spec.
+

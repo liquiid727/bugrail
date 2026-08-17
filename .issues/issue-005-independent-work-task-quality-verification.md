@@ -1,7 +1,7 @@
 ---
 id: issue-005
 title: "Independently verify Spec-linked WorkTask quality"
-status: draft
+status: pending_verification
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"

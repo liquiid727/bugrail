@@ -1,11 +1,13 @@
 ---
 id: issue-028
 title: "Implement route preview and persisted Route Inspector"
-status: draft
+status: superseded
 kind: implementation
 type: frontend
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-007
+replacementSpecId: BUGRAIL-SPECOS-011
+supersededBy: [issue-063, issue-064]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "13da86ab9e3289a51d07a15aad6555e80d02c1300ff0951e64929c8fb18d518b"
 requirements: [BUGRAIL-SPECOS-007.R01, BUGRAIL-SPECOS-007.R02, BUGRAIL-SPECOS-007.R03, BUGRAIL-SPECOS-007.R04, BUGRAIL-SPECOS-007.R05]

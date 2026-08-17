@@ -1,0 +1,551 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(WorkTaskRun::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(WorkTaskRun::TaskId).integer().not_null())
+                    .col(ColumnDef::new(WorkTaskRun::RunSeq).integer().not_null())
+                    .col(ColumnDef::new(WorkTaskRun::Status).string().not_null())
+                    .col(ColumnDef::new(WorkTaskRun::AgentProfileId).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::ModelProfileId).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::AgentType).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::Model).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::ModeId).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::Reasoning).string().null())
+                    .col(ColumnDef::new(WorkTaskRun::Resolution).text().null())
+                    .col(ColumnDef::new(WorkTaskRun::ConversationId).integer().null())
+                    .col(
+                        ColumnDef::new(WorkTaskRun::WorktreeFolderId)
+                            .integer()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskRun::ContextPackageId)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskRun::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskRun::StartedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskRun::FinishedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskRun::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(WorkTaskRun::TaskId)
+                            .col(WorkTaskRun::RunSeq),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskRun::Table, WorkTaskRun::TaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(WorkTaskDependency::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(WorkTaskDependency::ParentTaskId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskDependency::ChildTaskId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskDependency::Kind)
+                            .string()
+                            .not_null()
+                            .default("completion"),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskDependency::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(WorkTaskDependency::ParentTaskId)
+                            .col(WorkTaskDependency::ChildTaskId),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskDependency::Table, WorkTaskDependency::ParentTaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskDependency::Table, WorkTaskDependency::ChildTaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_work_task_dependency_child")
+                    .table(WorkTaskDependency::Table)
+                    .col(WorkTaskDependency::ChildTaskId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(WorkTaskHandoff::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(WorkTaskHandoff::TaskId).integer().not_null())
+                    .col(ColumnDef::new(WorkTaskHandoff::RunSeq).integer().not_null())
+                    .col(ColumnDef::new(WorkTaskHandoff::Summary).text().not_null())
+                    .col(ColumnDef::new(WorkTaskHandoff::Artifacts).text().not_null())
+                    .col(ColumnDef::new(WorkTaskHandoff::Risks).text().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskHandoff::OpenQuestions)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskHandoff::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(WorkTaskHandoff::TaskId)
+                            .col(WorkTaskHandoff::RunSeq),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskHandoff::Table, WorkTaskHandoff::TaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(TeamRun::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(TeamRun::Id)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(TeamRun::FolderId).integer().not_null())
+                    .col(ColumnDef::new(TeamRun::TeamId).string().not_null())
+                    .col(ColumnDef::new(TeamRun::WorkflowId).string().not_null())
+                    .col(
+                        ColumnDef::new(TeamRun::WorkflowVersion)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(TeamRun::MaxConcurrent).integer().not_null())
+                    .col(ColumnDef::new(TeamRun::ControlState).string().not_null())
+                    .col(ColumnDef::new(TeamRun::DefinitionHash).string().not_null())
+                    .col(
+                        ColumnDef::new(TeamRun::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(TeamRun::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(TeamRun::FinishedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(TeamRunTask::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(TeamRunTask::TeamRunId).string().not_null())
+                    .col(ColumnDef::new(TeamRunTask::NodeId).string().not_null())
+                    .col(
+                        ColumnDef::new(TeamRunTask::TaskId)
+                            .integer()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(TeamRunTask::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(TeamRunTask::TeamRunId)
+                            .col(TeamRunTask::NodeId),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(TeamRunTask::Table, TeamRunTask::TeamRunId)
+                            .to(TeamRun::Table, TeamRun::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(TeamRunTask::Table, TeamRunTask::TaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(WorkTaskContextPack::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::Id)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::TaskId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::RunSeq)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::LoadoutId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::ContentHash)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::EstimatedTokens)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::TotalBytes)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::ProviderStatus)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextPack::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskContextPack::Table, WorkTaskContextPack::TaskId)
+                            .to(WorkTask::Table, WorkTask::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_context_pack_task_run")
+                    .table(WorkTaskContextPack::Table)
+                    .col(WorkTaskContextPack::TaskId)
+                    .col(WorkTaskContextPack::RunSeq)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(WorkTaskContextItem::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Id)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::PackageId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Ordinal)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Kind)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Source)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Title)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Content)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::ContentHash)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Required)
+                            .boolean()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContextItem::Provenance)
+                            .text()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(WorkTaskContextItem::Table, WorkTaskContextItem::PackageId)
+                            .to(WorkTaskContextPack::Table, WorkTaskContextPack::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_context_item_package_order")
+                    .table(WorkTaskContextItem::Table)
+                    .col(WorkTaskContextItem::PackageId)
+                    .col(WorkTaskContextItem::Ordinal)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(ContextActivity::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ContextActivity::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ContextActivity::FolderId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ContextActivity::PackageId).string().null())
+                    .col(ColumnDef::new(ContextActivity::ProviderId).string().null())
+                    .col(ColumnDef::new(ContextActivity::Kind).string().not_null())
+                    .col(ColumnDef::new(ContextActivity::Status).string().not_null())
+                    .col(ColumnDef::new(ContextActivity::Message).text().null())
+                    .col(
+                        ColumnDef::new(ContextActivity::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        for table in [
+            ContextActivity::Table.into_iden(),
+            WorkTaskContextItem::Table.into_iden(),
+            WorkTaskContextPack::Table.into_iden(),
+            TeamRunTask::Table.into_iden(),
+            TeamRun::Table.into_iden(),
+            WorkTaskHandoff::Table.into_iden(),
+            WorkTaskDependency::Table.into_iden(),
+            WorkTaskRun::Table.into_iden(),
+        ] {
+            manager
+                .drop_table(Table::drop().table(table).if_exists().to_owned())
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum WorkTask {
+    Table,
+    Id,
+}
+#[derive(DeriveIden)]
+enum WorkTaskRun {
+    Table,
+    TaskId,
+    RunSeq,
+    Status,
+    AgentProfileId,
+    ModelProfileId,
+    AgentType,
+    Model,
+    ModeId,
+    Reasoning,
+    Resolution,
+    ConversationId,
+    WorktreeFolderId,
+    ContextPackageId,
+    CreatedAt,
+    StartedAt,
+    FinishedAt,
+    UpdatedAt,
+}
+#[derive(DeriveIden)]
+enum WorkTaskDependency {
+    Table,
+    ParentTaskId,
+    ChildTaskId,
+    Kind,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum WorkTaskHandoff {
+    Table,
+    TaskId,
+    RunSeq,
+    Summary,
+    Artifacts,
+    Risks,
+    OpenQuestions,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum TeamRun {
+    Table,
+    Id,
+    FolderId,
+    TeamId,
+    WorkflowId,
+    WorkflowVersion,
+    MaxConcurrent,
+    ControlState,
+    DefinitionHash,
+    CreatedAt,
+    UpdatedAt,
+    FinishedAt,
+}
+#[derive(DeriveIden)]
+enum TeamRunTask {
+    Table,
+    TeamRunId,
+    NodeId,
+    TaskId,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum WorkTaskContextPack {
+    Table,
+    Id,
+    TaskId,
+    RunSeq,
+    LoadoutId,
+    Status,
+    ContentHash,
+    EstimatedTokens,
+    TotalBytes,
+    ProviderStatus,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum WorkTaskContextItem {
+    Table,
+    Id,
+    PackageId,
+    Ordinal,
+    Kind,
+    Source,
+    Title,
+    Content,
+    ContentHash,
+    Required,
+    Provenance,
+}
+#[derive(DeriveIden)]
+enum ContextActivity {
+    Table,
+    Id,
+    FolderId,
+    PackageId,
+    ProviderId,
+    Kind,
+    Status,
+    Message,
+    CreatedAt,
+}

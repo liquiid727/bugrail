@@ -1,7 +1,7 @@
 ---
 id: issue-004
 title: "Show Spec and gate traceability in Task Detail"
-status: draft
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"

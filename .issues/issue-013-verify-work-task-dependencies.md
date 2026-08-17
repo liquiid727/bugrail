@@ -1,11 +1,13 @@
 ---
 id: issue-013
 title: "Derive and execute verification for WorkTask dependencies"
-status: draft
+status: superseded
 kind: verification
 type: fullstack
 priority: high
 sourceSpecId: BUGRAIL-SPECOS-003
+replacementSpecId: BUGRAIL-SPECOS-004
+supersededBy: [issue-048, issue-049]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "301702c3135f0f70700ce7475c6a9b0292d41ca9d4a9eb711c82e5b37e9d801d"
 requirements: [BUGRAIL-SPECOS-003.R01, BUGRAIL-SPECOS-003.R02, BUGRAIL-SPECOS-003.R03, BUGRAIL-SPECOS-003.R04, BUGRAIL-SPECOS-003.R05]

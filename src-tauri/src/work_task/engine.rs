@@ -46,9 +46,7 @@ use crate::models::{
     AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskGateStatus,
     WorkTaskMergeState, WorkTaskPreflight, STAGE_PROMPT_ALL,
 };
-use crate::web::event_bridge::{
-    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
-};
+use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
 use crate::work_task::git as task_git;
 
 /// Reconcile sweep cadence.
@@ -392,14 +390,17 @@ impl TaskEngine {
         self.preflight_folder(task.folder_id).await?;
         match work_task_service::claim_for_run(&self.db.conn, task_id, WorkTaskStatus::Todo, "user")
             .await
-            .map_err(|e| e.to_string())?
         {
-            Some(_) => {
+            Ok(Some(_)) => {
                 self.emit_upsert(task_id);
                 self.pump_folder(task.folder_id).await;
                 Ok(())
             }
-            None => Err("task is not in todo".to_string()),
+            Ok(None) => Err("task is not in todo".to_string()),
+            Err(e) if crate::db::service::specos_runtime_service::is_unmet_dependency(&e) => {
+                Err("workTask.dependency.unmet".into())
+            }
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -431,18 +432,22 @@ impl TaskEngine {
                 // The unplanned-only claim, not the generic one: `ids` is a
                 // snapshot, and a plan set in the meantime must still be
                 // honoured rather than silently overridden by a bulk button.
-                if work_task_service::claim_unplanned_for_run(
+                match work_task_service::claim_unplanned_for_run(
                     &self.db.conn,
                     id,
                     WorkTaskStatus::Todo,
                     "user",
                 )
                 .await
-                    .map_err(|e| e.to_string())?
-                    .is_some()
                 {
-                    folder_claimed += 1;
-                    self.emit_upsert(id);
+                    Ok(Some(_)) => {
+                        folder_claimed += 1;
+                        self.emit_upsert(id);
+                    }
+                    Ok(None) => {}
+                    Err(e)
+                        if crate::db::service::specos_runtime_service::is_unmet_dependency(&e) => {}
+                    Err(e) => return Err(e.to_string()),
                 }
             }
             if folder_claimed > 0 {
@@ -594,7 +599,9 @@ impl TaskEngine {
         self.awaiting.lock().await.remove(&task_id);
 
         // Converge a stranded InProgress conversation.
-        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok();
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .ok();
         if let Some(conv_id) = task.as_ref().and_then(|t| t.conversation_id) {
             if self.conversation_status(conv_id).await == Some(ConversationStatus::InProgress) {
                 self.cancel_conversation(conv_id).await;
@@ -692,28 +699,26 @@ impl TaskEngine {
                 .filter(|(_, owner)| owner.folder_id == folder_id)
                 .map(|(tid, _)| *tid)
                 .collect();
-            let active = match work_task_service::active_launched_count(&self.db.conn, folder_id)
-                .await
-            {
-                Ok(n) => n + launching.len() as u64,
-                Err(e) => {
-                    tracing::warn!("[work_task] pump count error: {e}");
-                    return;
-                }
-            };
+            let active =
+                match work_task_service::active_launched_count(&self.db.conn, folder_id).await {
+                    Ok(n) => n + launching.len() as u64,
+                    Err(e) => {
+                        tracing::warn!("[work_task] pump count error: {e}");
+                        return;
+                    }
+                };
             if max != 0 && active >= max {
                 return;
             }
-            let next = match work_task_service::next_queued(&self.db.conn, folder_id, &launching)
-                .await
-            {
-                Ok(Some(t)) => t,
-                Ok(None) => return,
-                Err(e) => {
-                    tracing::warn!("[work_task] pump next error: {e}");
-                    return;
-                }
-            };
+            let next =
+                match work_task_service::next_queued(&self.db.conn, folder_id, &launching).await {
+                    Ok(Some(t)) => t,
+                    Ok(None) => return,
+                    Err(e) => {
+                        tracing::warn!("[work_task] pump next error: {e}");
+                        return;
+                    }
+                };
             // Claimed synchronously: this loop iterates immediately, and the
             // task must already read as in-flight when it does.
             let token = self.claim_launch_slot(next.id, folder_id).await;
@@ -833,15 +838,33 @@ impl TaskEngine {
         // Effective agent + config: task override > folder task settings >
         // folder default agent. Audited via a config_effective event (values
         // are inherited live, never frozen).
-        let cfg: WorkTaskConfig =
-            serde_json::from_str(&task.config).unwrap_or_default();
+        let cfg: WorkTaskConfig = serde_json::from_str(&task.config).unwrap_or_default();
         let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
             .await
             .unwrap_or_default();
-        let (agent_str, mode_id, config_values) = effective_agent_config(&cfg, &settings, &root);
-        let agent_str = agent_str.ok_or_else(|| {
-            "no agent configured: set a task agent or a folder default".to_string()
-        })?;
+        let folder_default = root
+            .default_agent_type
+            .as_ref()
+            .and_then(|a| serde_json::to_value(a).ok())
+            .and_then(|v| v.as_str().map(String::from));
+        let resolved = crate::agent_runtime::resolve(
+            std::path::Path::new(&root.path),
+            &cfg,
+            &settings,
+            folder_default,
+        )
+        .map_err(|e| e.to_string())?;
+        crate::db::service::specos_runtime_service::update_run_resolution(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            &resolved,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let agent_str = resolved.agent_type.clone();
+        let mode_id = resolved.mode_id.clone();
+        let config_values = crate::agent_runtime::config_snapshot(&resolved);
         let agent_type = parse_agent_type(&agent_str)?;
 
         // Cheap validation before any side effects; the full prompt is composed
@@ -908,6 +931,27 @@ impl TaskEngine {
             wt
         };
 
+        // Resolve and persist one immutable Context Package after the worktree
+        // exists but before any ACP process receives a prompt. A resume
+        // fallback reuses this same `(task_id, run_seq)` package.
+        let prepared_context = if matches!(mode, LaunchMode::Merge { .. }) {
+            None
+        } else {
+            Some(
+                crate::context::prepare_run(
+                    &self.db.conn,
+                    task.folder_id,
+                    std::path::Path::new(&root.path),
+                    std::path::Path::new(&wt.path),
+                    task_id,
+                    run_seq,
+                    resolved.context_loadout_id.as_deref(),
+                )
+                .await
+                .map_err(|e| e.to_string())?,
+            )
+        };
+
         let _ = work_task_service::record_event(
             &self.db.conn,
             task_id,
@@ -943,10 +987,14 @@ impl TaskEngine {
             }
         };
 
-        let runtime_env =
-            build_session_runtime_env(&self.db, agent_type, resume_session_id.as_deref(), &self.data_dir)
-                .await
-                .map_err(|e| e.to_string())?;
+        let runtime_env = build_session_runtime_env(
+            &self.db,
+            agent_type,
+            resume_session_id.as_deref(),
+            &self.data_dir,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         verify_agent_installed(agent_type)
             .await
             .map_err(|e| e.to_string())?;
@@ -1021,8 +1069,16 @@ impl TaskEngine {
         };
         emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
 
-        let mut blocks =
-            compose_prompt(&cfg, &task, &mode, &settings, resumed, &self.db.conn).await?;
+        let mut blocks = compose_prompt(
+            &cfg,
+            &task,
+            &mode,
+            &settings,
+            resumed,
+            prepared_context.map(|context| context.prompt),
+            &self.db.conn,
+        )
+        .await?;
         // Re-encode attached images for the agent that actually answered the
         // handshake. A task's blocks are STORED — the composer picked their
         // encoding from a transient probe that may not have landed, possibly
@@ -1302,7 +1358,10 @@ impl TaskEngine {
 
     /// The task's recorded worktree, required to exist on disk — the merge
     /// generation must never mint a fresh (empty) one.
-    async fn existing_worktree(&self, task: &crate::db::entities::work_task::Model) -> Result<WorktreeRef, String> {
+    async fn existing_worktree(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+    ) -> Result<WorktreeRef, String> {
         let wt_id = task
             .worktree_folder_id
             .ok_or_else(|| "task has no worktree".to_string())?;
@@ -1349,8 +1408,12 @@ impl TaskEngine {
         if ok {
             Ok(())
         } else {
-            let code = exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
-            Err(format!("worktree init command failed (exit {code}): {tail}"))
+            let code = exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into());
+            Err(format!(
+                "worktree init command failed (exit {code}): {tail}"
+            ))
         }
     }
 
@@ -1520,7 +1583,9 @@ impl TaskEngine {
         self.awaiting.lock().await.remove(&task_id);
         let _ = self.manager.disconnect(conn_id).await;
 
-        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok();
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .ok();
 
         // A merge generation settles from git truth whatever the stop reason —
         // the agent may have landed the merge and then errored or been stopped.
@@ -1844,7 +1909,11 @@ impl TaskEngine {
             } else {
                 WorkTaskGateStatus::Failed
             },
-            if passed { None } else { light.output_tail.clone() },
+            if passed {
+                None
+            } else {
+                light.output_tail.clone()
+            },
             Some(serde_json::Value::Object(evidence)),
         )
         .await;
@@ -1852,7 +1921,9 @@ impl TaskEngine {
 
     /// Best-effort diff-stat snapshot of the task worktree vs its base.
     async fn snapshot_diff_stats(&self, task_id: i32) -> Option<(i32, i32, i32)> {
-        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok()?;
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .ok()?;
         let wt_id = task.worktree_folder_id?;
         let base = task.base_sha.clone()?;
         let wt = get_folder_core(&self.db, wt_id).await.ok()?;
@@ -2122,9 +2193,13 @@ impl TaskEngine {
                 .into_iter()
                 .any(|t| t.folder_id == task.folder_id);
         if another_merging {
-            return Err("another task of this project is already merging — wait for it".to_string());
+            return Err(
+                "another task of this project is already merging — wait for it".to_string(),
+            );
         }
-        let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
+        let head = resolve_git_head(&root.path)
+            .await
+            .map_err(|e| e.to_string())?;
         if head.branch.as_deref() != Some(base_branch.as_str()) {
             return Err(format!(
                 "project folder is on '{}', expected '{base_branch}' — switch back to merge",
@@ -2219,8 +2294,12 @@ impl TaskEngine {
             .as_deref()
             .and_then(|s| serde_json::from_str::<WorkTaskMergeState>(s).ok())
         else {
-            self.back_to_review(task_id, "merge state lost — please merge again".to_string(), None)
-                .await;
+            self.back_to_review(
+                task_id,
+                "merge state lost — please merge again".to_string(),
+                None,
+            )
+            .await;
             return;
         };
         let root = match get_folder_core(&self.db, task.folder_id).await {
@@ -2631,12 +2710,9 @@ impl TaskEngine {
             return;
         };
 
-        if let Err(e) = task_git::remove_worktree_and_branch(
-            &root.path,
-            &wt.path,
-            task.work_branch.as_deref(),
-        )
-        .await
+        if let Err(e) =
+            task_git::remove_worktree_and_branch(&root.path, &wt.path, task.work_branch.as_deref())
+                .await
         {
             let _ = work_task_service::set_cleanup_state(
                 &self.db.conn,
@@ -2743,10 +2819,7 @@ impl TaskEngine {
                 }
                 match work_task_service::abandon_setup(&self.db.conn, task.id, task.run_seq).await {
                     Ok(true) => {
-                        tracing::info!(
-                            "[work_task] requeued orphaned setup of task {}",
-                            task.id
-                        );
+                        tracing::info!("[work_task] requeued orphaned setup of task {}", task.id);
                         self.emit_upsert(task.id);
                     }
                     Ok(false) => {}
@@ -3017,39 +3090,6 @@ fn launch_mode_for(task: &crate::db::entities::work_task::Model) -> LaunchMode {
     }
 }
 
-/// Layered agent config: task override wins wholesale; else the folder's task
-/// settings; else the folder's default agent with no extra options.
-fn effective_agent_config(
-    cfg: &WorkTaskConfig,
-    settings: &WorkTaskFolderSettings,
-    root: &crate::models::FolderDetail,
-) -> (
-    Option<String>,
-    Option<String>,
-    std::collections::BTreeMap<String, String>,
-) {
-    if let Some(agent) = cfg.agent_type.clone() {
-        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
-    }
-    if let Some(agent) = settings.default_agent_type.clone() {
-        return (
-            Some(agent),
-            settings.mode_id.clone(),
-            settings.config_values.clone(),
-        );
-    }
-    let folder_default = root
-        .default_agent_type
-        .as_ref()
-        .and_then(|a| serde_json::to_value(a).ok())
-        .and_then(|v| v.as_str().map(String::from));
-    (
-        folder_default,
-        settings.mode_id.clone(),
-        settings.config_values.clone(),
-    )
-}
-
 /// Compose the prompt for a launch mode. Fresh runs replay the task's blocks.
 /// Retry/return compose against the session we actually got: a resumed session
 /// already carries the task context, while a fresh fallback session needs the
@@ -3061,6 +3101,7 @@ async fn compose_prompt(
     mode: &LaunchMode,
     settings: &WorkTaskFolderSettings,
     resumed: bool,
+    context_prompt: Option<String>,
     conn: &sea_orm::DatabaseConnection,
 ) -> Result<Vec<PromptInputBlock>, String> {
     let mut blocks: Vec<PromptInputBlock> = Vec::new();
@@ -3162,9 +3203,7 @@ async fn compose_prompt(
                 blocks.extend(original);
             }
             let land_command = if strategy == "merge" {
-                format!(
-                    "git -C \"{root_path}\" merge --no-ff -m \"<message>\" {work_branch}"
-                )
+                format!("git -C \"{root_path}\" merge --no-ff -m \"<message>\" {work_branch}")
             } else {
                 format!(
                     "git -C \"{root_path}\" merge --squash {work_branch} && \
@@ -3194,6 +3233,12 @@ async fn compose_prompt(
                 ),
             });
         }
+    }
+
+    // Context belongs immediately before the standing safety/stage blocks so
+    // provider content can never become the final instruction of the prompt.
+    if let Some(text) = context_prompt {
+        blocks.push(PromptInputBlock::Text { text });
     }
 
     // The standing worktree guard — a merge generation replaces it with its
@@ -3248,10 +3293,7 @@ async fn compose_prompt(
 
 /// The user's own instructions for a stage: the `all` text (every stage) then
 /// the stage's own, as one trailing block. Empty when neither is configured.
-fn stage_prompt_block(
-    settings: &WorkTaskFolderSettings,
-    stage: &str,
-) -> Option<PromptInputBlock> {
+fn stage_prompt_block(settings: &WorkTaskFolderSettings, stage: &str) -> Option<PromptInputBlock> {
     let extras: Vec<&str> = [STAGE_PROMPT_ALL, stage]
         .into_iter()
         .filter_map(|key| settings.stage_prompts.get(key))
@@ -3952,8 +3994,14 @@ mod tests {
                  feedback. Address it in this same worktree:\n\nplease fix the copy",
             ),
             (FollowUpIntent::Continue, "accepted it as it stands"),
-            (FollowUpIntent::Question, "This is a question, not a work order"),
-            (FollowUpIntent::Verify, "read the full diff of this worktree"),
+            (
+                FollowUpIntent::Question,
+                "This is a question, not a work order",
+            ),
+            (
+                FollowUpIntent::Verify,
+                "read the full diff of this worktree",
+            ),
         ];
         for (intent, expected) in cases {
             let blocks = compose_prompt(
@@ -4485,7 +4533,10 @@ mod tests {
             .await
             .expect("compose");
             let joined = texts(&blocks).join("\n");
-            assert!(joined.contains("EVERY-STAGE"), "{expected}: missing all-stage text");
+            assert!(
+                joined.contains("EVERY-STAGE"),
+                "{expected}: missing all-stage text"
+            );
             assert!(joined.contains(expected), "{expected}: missing own text");
             for other in ["WORK-ONLY", "RETRY-ONLY", "RETURN-ONLY", "MERGE-ONLY"] {
                 if other != expected {
@@ -4513,7 +4564,9 @@ mod tests {
         let texts = texts(&blocks);
         // The merge generation replaces the guard (it forbids exactly what a
         // merge must do) — the user's extra still trails it.
-        assert!(texts.iter().all(|t| !t.starts_with("—— Work task context ——")));
+        assert!(texts
+            .iter()
+            .all(|t| !t.starts_with("—— Work task context ——")));
         assert!(texts[0].contains("land it onto the base branch"));
         assert!(texts
             .last()

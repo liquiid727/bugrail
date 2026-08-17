@@ -11,6 +11,11 @@ import {
 } from "@/components/automations/automations-page"
 import { TasksChromeActions } from "@/components/tasks/tasks-chrome-actions"
 import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
+import { TeamsPage, TeamsPageTitle } from "@/components/teams/teams-page"
+import {
+  ContextPage,
+  ContextPageTitle,
+} from "@/components/context-system/context-page"
 import {
   TokenUsagePage,
   TokenUsagePageTitle,
@@ -26,6 +31,8 @@ import {
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
   tasks: TasksPage,
+  teams: TeamsPage,
+  context: ContextPage,
   tokenUsage: TokenUsagePage,
 }
 
@@ -35,6 +42,8 @@ const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
   {
     automations: AutomationsPageTitle,
     tasks: TasksPageTitle,
+    teams: TeamsPageTitle,
+    context: ContextPageTitle,
     tokenUsage: TokenUsagePageTitle,
   }
 

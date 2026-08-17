@@ -4,18 +4,48 @@
 
 - Product: `Code: BugRail`
 - Status: proposed
-- Date: `2026-08-09`
+- Date: `2026-08-12`
 - Product source: `docs/specos/product-vision.md`
-- Product requirements: `.prd/prd-specos-delivery-control.md`
+- Product requirements: `.prd/prd-specos-agent-team-context-system.md`
 - Existing-code map: `docs/specos/codeg-module-map.md`
 - First Feature: `.features/BUGRAIL-SPECOS-001-work-task-quality/spec.md`
-- Decision: `design/adr/ADR-001-embed-specos-in-work-task.md`
+- Decisions: `design/adr/ADR-001-embed-specos-in-work-task.md`,
+  `design/adr/ADR-002-agent-profile-team-worktask.md`,
+  `design/adr/ADR-003-context-orchestrator-provider-boundary.md`
 
 ## Purpose
 
 Define where SpecOS behavior belongs in BugRail and how it extends inherited
 CodeG modules without creating parallel workflow, runtime, event, or storage
 systems.
+
+The 2026-08-12 revision adds two deep modules: profile resolution and the
+Context control plane. Static Team workflows project into WorkTasks; Context
+Providers remain behind CodeG-owned loadout, budget, package, and provenance
+contracts.
+
+## Agent Team And Context Extension
+
+```text
+.codeg Agent/Model/Team/Workflow/Context definitions
+                     |
+          validated project registries
+             /                 \
+ResolvedAgentRuntime       Context Package
+             \                 /
+              existing WorkTask run
+          dependencies + Team control
+                     |
+       existing ACP / Session / Worktree
+```
+
+- Profiles and workflow definitions are Git-trackable configuration; resolved
+  run facts, Team node bindings, packages, and activity are SQLite projections.
+- The Team scheduler adds readiness, pause, and concurrency predicates to the
+  existing claim path; it does not own another task lifecycle.
+- Context is compiled before prompt dispatch and bound to `task_id/run_seq`.
+  Required failures are fail-closed; optional failures are explicit degradation.
+- Team and Context commands share command-core behavior between Tauri and Axum.
 
 ## System Context
 

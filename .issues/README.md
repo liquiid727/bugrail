@@ -1,40 +1,48 @@
-# SpecOS Delivery Control Issue Index
+# SpecOS Agent Team And Context Issue Index
 
 ## Status
 
-All Issues are local draft delivery units generated from
-`.prd/prd-specos-delivery-control.md` and the exact Feature Spec versions/hashes
-under `.features/`. Draft status does not authorize implementation or claim
-verification evidence.
+This index implements the approved 2026-08-12 PRD/SPEC migration. Issue IDs are
+never reused:
 
-## Feature Groups
+- `001-005` retain the original `BUGRAIL-SPECOS-001` delivery history. Issues
+  `001-004` are implemented pending verification; `005` owns independent
+  verification.
+- `006-042` are retained as `superseded` historical plans. Each frontmatter
+  block names its replacement Feature and Issue range.
+- `043-076` are the current implementation/verification graph derived from
+  `.prd/prd-specos-agent-team-context-system.md` and Features `002-016`.
 
-| Feature | Issues | Delivery sequence | Client Issue |
-|---|---:|---|---:|
-| `BUGRAIL-SPECOS-001` Contract and Gates | `001-005` | schema -> bind/preview -> enforce -> client -> verify | `004` |
-| `BUGRAIL-SPECOS-002` Run Evidence | `006-009` | persistence -> trace API -> client -> verify | `008` |
-| `BUGRAIL-SPECOS-003` Dependencies | `010-013` | graph store -> readiness -> client -> verify | `012` |
-| `BUGRAIL-SPECOS-004` Integration | `014-017` | task/handoff -> integration -> client -> verify | `016` |
-| `BUGRAIL-SPECOS-005` Context Pack | `018-021` | compiler -> run integration -> client -> verify | `020` |
-| `BUGRAIL-SPECOS-006` Impact | `022-025` | analyzer -> cache/context -> client -> verify | `024` |
-| `BUGRAIL-SPECOS-007` Routing | `026-029` | resolver -> fallback -> client -> verify | `028` |
-| `BUGRAIL-SPECOS-008` Evaluation | `030-033` | projection -> reports -> client -> verify | `032` |
-| `BUGRAIL-SPECOS-009` Memory | `034-037` | extraction -> file/context -> client -> verify | `036` |
-| `BUGRAIL-SPECOS-010` Skills | `038-042` | candidate -> validation -> activation -> client -> verify | `041` |
+## Current Issue Groups
+
+| Feature | Issues | Delivery closure |
+|---|---:|---|
+| `001` WorkTask Contract/Gates | `001-005` | exact Spec/AC binding and enforced gates |
+| `002` Agent/Model Profiles | `043-045` | catalogs, resolution, UI/verification |
+| `003` Run Evidence | `046-047` | durable generations and inspector |
+| `004` Dependencies | `048-049` | readiness enforcement and trace |
+| `005` Integration/Handoff | `050-051` | structured handoff and integration evidence |
+| `006` Context Package | `052-053` | deterministic compiler, run binding and inspector |
+| `007` Provider Bootstrap | `054-055` | health/adapter boundary and verification |
+| `008` Context Loadouts | `056-058` | definitions, launch integration and security/UI |
+| `009` Context Activity | `059-060` | Overview projection and first-level route |
+| `010` Repository Impact | `061-062` | bounded analyzer and inspector |
+| `011` Explainable Routing | `063-064` | policy/decision and inspector |
+| `012` Run Evaluation | `065-066` | qualified facts and insights |
+| `013` Project Memory | `067-068` | candidate lifecycle and review UI |
+| `014` Skill Experience | `069-070` | evidence/validation/promotion and UI |
+| `015` Static Team Workflow | `071-073` | catalogs, materialization/scheduler and DAG UI |
+| `016` Team Operations | `074-076` | controls, node trace/handoff and verification |
 
 ## Execution Rules
 
-- Follow each file's `dependsOn`; do not execute only by numeric order.
-- Recompute the source Spec SHA-256 before promoting an Issue from `draft`.
-- A mismatched Spec version/hash makes the Issue stale.
-- A verification Issue first derives and approves the exact-version Test Spec,
-  then executes evidence; implementation-owned output alone cannot close it.
-- Frontend Issues follow `design/specos-client-interaction-design.md` and must
-  retain backend authority for gates, readiness, routing, evaluation, approval,
-  activation, and rollback.
-
-## First Implementable Slice
-
-Only `BUGRAIL-SPECOS-001` currently has an independently derived draft Test Spec.
-Its ADR, Feature Spec, and Test Spec still require approval before Issues
-`001-005` can move out of draft. Later groups remain dependency-planned backlog.
+- Follow `dependsOn`; numeric order alone is not authority.
+- Recompute the exact source Feature hash before implementation or verification.
+- `implemented_pending_verification` means code is present but the matching Test
+  Spec evidence is not yet accepted; it is not equivalent to verified/done.
+- Verification Issues execute the exact-version Test Spec and retain commands,
+  exit codes, fixture/commit IDs, reports, and durable database/Git oracles.
+- Frontend state never substitutes for backend readiness, gates, Team control,
+  runtime resolution, Context provenance, Memory approval, or Skill activation.
+- Tauri and Axum use the same command-core behavior and must be verified as one
+  compatibility contract.

@@ -9,6 +9,7 @@
 
 pub mod acp;
 pub mod acp_transcript;
+pub mod agent_runtime;
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
@@ -19,6 +20,7 @@ pub mod automation;
 pub mod backgrounds;
 pub mod chat_channel;
 pub mod commands;
+pub mod context;
 pub mod db;
 pub mod folder_links;
 pub mod git_credential;
@@ -38,6 +40,7 @@ pub mod product;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
+pub mod specos_control;
 pub mod supervise;
 mod terminal;
 pub mod turn_timings;
@@ -75,6 +78,7 @@ mod tauri_app {
         remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
         session_info as session_info_commands,
+        specos_control as specos_control_commands,
         system_settings, terminal as terminal_commands,
         token_usage as token_usage_commands,
         version_control, windows, work_task as work_task_commands,
@@ -1311,6 +1315,23 @@ mod tauri_app {
                 work_task_commands::work_task_gate_list,
                 work_task_commands::work_task_gate_decision,
                 work_task_commands::work_task_gate_human_decide,
+                specos_control_commands::specos_agent_catalog_get,
+                specos_control_commands::specos_agent_catalog_save,
+                specos_control_commands::specos_team_catalog_get,
+                specos_control_commands::specos_team_catalog_save,
+                specos_control_commands::specos_team_run_list,
+                specos_control_commands::specos_team_run_start,
+                specos_control_commands::specos_team_run_control,
+                specos_control_commands::specos_context_config_get,
+                specos_control_commands::specos_context_config_save,
+                specos_control_commands::specos_context_overview,
+                specos_control_commands::specos_context_package_get,
+                specos_control_commands::specos_work_task_runs,
+                specos_control_commands::specos_work_task_dependencies,
+                specos_control_commands::specos_work_task_handoff_get,
+                specos_control_commands::specos_work_task_handoff_save,
+                specos_control_commands::specos_work_task_integration_plan,
+                specos_control_commands::specos_work_task_integration_refresh,
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,

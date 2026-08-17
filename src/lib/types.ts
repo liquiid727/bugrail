@@ -1355,6 +1355,11 @@ export interface WorkTaskConfig {
   prompt_blocks: PromptInputBlock[]
   display_text: string
   agent_type?: AgentType | null
+  agent_profile_id?: string | null
+  model_profile_id?: string | null
+  context_loadout_id?: string | null
+  team_run_id?: string | null
+  team_node_id?: string | null
   mode_id?: string | null
   config_values: Record<string, string>
   label_snapshot?: AutomationLabelSnapshot | null
@@ -1588,6 +1593,250 @@ export interface WorkTaskGateDecision {
   required: GateDecisionItem[]
   unmet: GateDecisionItem[]
   waived: GateDecisionItem[]
+}
+
+// --- SpecOS Agent Team + Context control plane ---
+
+export interface ModelProfile {
+  id: string
+  name: string
+  providerRef?: string | null
+  model: string
+  reasoning?: string | null
+  fallbackProfileIds: string[]
+}
+
+export interface AgentProfile {
+  id: string
+  name: string
+  runtimeAdapter: string
+  modelProfileId?: string | null
+  modeId?: string | null
+  reasoning?: string | null
+  contextLoadoutId?: string | null
+  skills: string[]
+  rules: string[]
+  tools: string[]
+  configValues: Record<string, string>
+  enabled: boolean
+}
+
+export interface AgentCatalog {
+  version: number
+  defaultAgentProfileId?: string | null
+  modelProfiles: ModelProfile[]
+  agentProfiles: AgentProfile[]
+  validationErrors?: string[]
+}
+
+export interface TeamDefinition {
+  id: string
+  name: string
+  description: string
+  memberProfileIds: string[]
+}
+
+export interface WorkflowNodeDefinition {
+  id: string
+  title: string
+  prompt: string
+  agentProfileId: string
+  modelProfileId?: string | null
+  contextLoadoutId?: string | null
+  dependsOn: string[]
+}
+
+export interface TeamWorkflowDefinition {
+  id: string
+  name: string
+  version: number
+  teamId: string
+  maxConcurrent: number
+  nodes: WorkflowNodeDefinition[]
+}
+
+export interface TeamCatalog {
+  version: number
+  teams: TeamDefinition[]
+  workflows: TeamWorkflowDefinition[]
+  validationErrors?: string[]
+}
+
+export interface ContextProviderConfig {
+  id: string
+  kind: string
+  endpoint?: string | null
+  secretEnv?: string | null
+  enabled: boolean
+  required: boolean
+  capabilities: string[]
+}
+
+export interface ContextSourceConfig {
+  path: string
+  required: boolean
+  kind: string
+}
+
+export interface ContextLoadout {
+  id: string
+  name: string
+  sources: ContextSourceConfig[]
+  providerIds: string[]
+  maxItems: number
+  maxBytes: number
+  maxTokens: number
+}
+
+export interface ContextConfig {
+  version: number
+  defaultLoadoutId: string
+  providers: ContextProviderConfig[]
+  loadouts: ContextLoadout[]
+  validationErrors?: string[]
+}
+
+export interface WorkTaskRunInfo {
+  taskId: number
+  runSeq: number
+  status: string
+  agentProfileId: string | null
+  modelProfileId: string | null
+  agentType: string | null
+  model: string | null
+  modeId: string | null
+  reasoning: string | null
+  resolution: Record<string, unknown> | null
+  conversationId: number | null
+  worktreeFolderId: number | null
+  contextPackageId: string | null
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  updatedAt: string
+}
+
+export interface WorkTaskDependencyInfo {
+  parentTaskId: number
+  childTaskId: number
+  kind: string
+}
+
+export interface WorkTaskHandoffDraft {
+  summary: string
+  artifacts: string[]
+  risks: string[]
+  openQuestions: string[]
+}
+
+export interface WorkTaskHandoffInfo extends WorkTaskHandoffDraft {
+  taskId: number
+  runSeq: number
+  sourceBranch?: string | null
+  sourceHead?: string | null
+  createdAt: string
+}
+
+export interface IntegrationSourceInfo {
+  taskId: number
+  title: string
+  status: string
+  runSeq: number
+  branch: string | null
+  currentHead: string | null
+  capturedHead: string | null
+  capturedRunSeq: number | null
+  hasHandoff: boolean
+  mergeOrder: number
+  stale: boolean
+}
+
+export interface IntegrationPlan {
+  taskId: number
+  status:
+    | "no_sources"
+    | "waiting_source"
+    | "eligible"
+    | "stale"
+    | "conflict"
+    | "landed"
+  sources: IntegrationSourceInfo[]
+  conflicts: string[]
+}
+
+export interface TeamRunNodeInfo {
+  nodeId: string
+  taskId: number
+  title: string
+  status: WorkTaskStatus
+  runSeq: number
+}
+
+export interface TeamRunInfo {
+  id: string
+  folderId: number
+  teamId: string
+  workflowId: string
+  workflowVersion: number
+  controlState: "running" | "paused" | "canceled"
+  status: string
+  definitionHash: string
+  nodes: TeamRunNodeInfo[]
+  createdAt: string
+  updatedAt: string
+  finishedAt: string | null
+}
+
+export interface ContextProviderHealth {
+  id: string
+  kind: string
+  status: "healthy" | "degraded" | "disabled"
+  message: string | null
+  checkedAt: string
+}
+
+export interface ContextItemInfo {
+  id: string
+  ordinal: number
+  kind: string
+  source: string
+  title: string
+  content: string
+  contentHash: string
+  required: boolean
+  provenance: Record<string, unknown>
+}
+
+export interface ContextPackageInfo {
+  id: string
+  taskId: number
+  runSeq: number
+  loadoutId: string
+  status: "ready" | "degraded" | "stale"
+  contentHash: string
+  estimatedTokens: number
+  totalBytes: number
+  providerStatus: ContextProviderHealth[]
+  items: ContextItemInfo[]
+  createdAt: string
+}
+
+export interface ContextActivityInfo {
+  id: number
+  folderId: number
+  packageId: string | null
+  providerId: string | null
+  kind: string
+  status: string
+  message: string | null
+  createdAt: string
+}
+
+export interface ContextOverview {
+  config: ContextConfig
+  providerHealth: ContextProviderHealth[]
+  packages: ContextPackageInfo[]
+  activity: ContextActivityInfo[]
 }
 
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---

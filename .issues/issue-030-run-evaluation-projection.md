@@ -1,11 +1,13 @@
 ---
 id: issue-030
 title: "Project idempotent evidence-qualified run evaluations"
-status: draft
+status: superseded
 kind: implementation
 type: backend
 priority: medium
 sourceSpecId: BUGRAIL-SPECOS-008
+replacementSpecId: BUGRAIL-SPECOS-012
+supersededBy: [issue-065, issue-066]
 sourceSpecVersion: "0.1"
 sourceSpecHash: "c1ea303649af37483548d4884cf90ce5a47cc8549edd4c880cf4c41c53b9ca2d"
 requirements: [BUGRAIL-SPECOS-008.R01, BUGRAIL-SPECOS-008.R02, BUGRAIL-SPECOS-008.R04, BUGRAIL-SPECOS-008.R05]

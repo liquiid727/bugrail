@@ -28,11 +28,12 @@ use crate::db::entities::{
     work_task_settings, work_task_template,
 };
 use crate::db::error::DbError;
+use crate::db::service::specos_runtime_service;
 use crate::models::{
     AcceptanceCriterionSnapshot, GateRequirement, WorkTaskConfig, WorkTaskContractInfo,
     WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskGateDecision,
-    WorkTaskGatePolicy, WorkTaskGateResultInfo, WorkTaskGateStatus, WorkTaskGateType,
-    WorkTaskInfo, WorkTaskMergeState,
+    WorkTaskGatePolicy, WorkTaskGateResultInfo, WorkTaskGateStatus, WorkTaskGateType, WorkTaskInfo,
+    WorkTaskMergeState,
 };
 use crate::work_task::gate_decision::{evaluate, GateAttemptInput};
 
@@ -178,9 +179,7 @@ pub async fn list(
         .filter(|t| {
             matches!(
                 t.status,
-                WorkTaskStatus::Running
-                    | WorkTaskStatus::AwaitingInput
-                    | WorkTaskStatus::Merging
+                WorkTaskStatus::Running | WorkTaskStatus::AwaitingInput | WorkTaskStatus::Merging
             )
         })
         .map(|t| t.id)
@@ -327,10 +326,19 @@ pub async fn next_queued(
     if !exclude.is_empty() {
         q = q.filter(work_task::Column::Id.is_not_in(exclude.iter().copied()));
     }
-    Ok(q.order_by_asc(work_task::Column::SortOrder)
+    let rows = q
+        .order_by_asc(work_task::Column::SortOrder)
         .order_by_asc(work_task::Column::Id)
-        .one(conn)
-        .await?)
+        .all(conn)
+        .await?;
+    for row in rows {
+        if specos_runtime_service::dependencies_satisfied(conn, row.id).await?
+            && specos_runtime_service::team_task_launch_allowed(conn, row.id).await?
+        {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
 }
 
 /// Distinct folder ids that currently have pending (todo or queued) tasks over
@@ -340,9 +348,7 @@ pub async fn next_queued(
 pub async fn folders_with_pending(conn: &DatabaseConnection) -> Result<Vec<i32>, DbError> {
     let rows = work_task::Entity::find()
         .filter(work_task::Column::DeletedAt.is_null())
-        .filter(
-            work_task::Column::Status.is_in([WorkTaskStatus::Todo, WorkTaskStatus::Queued]),
-        )
+        .filter(work_task::Column::Status.is_in([WorkTaskStatus::Todo, WorkTaskStatus::Queued]))
         .inner_join(folder::Entity)
         .filter(folder::Column::DeletedAt.is_null())
         .all(conn)
@@ -427,6 +433,19 @@ pub async fn create(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
+    let txn = conn.begin().await?;
+    let row = create_in_transaction(&txn, draft).await?;
+    txn.commit().await?;
+    Ok(to_info(row))
+}
+
+/// Insert a WorkTask and its initial event into an existing transaction.
+/// Team materialization uses this so a malformed node/edge cannot leave a
+/// partially-created graph. Callers own commit/rollback.
+pub async fn create_in_transaction<C: ConnectionTrait>(
+    conn: &C,
+    draft: WorkTaskDraft,
+) -> Result<work_task::Model, DbError> {
     validate_draft(&draft)?;
     // The target folder must exist, be live, and be a project root (a task
     // bound to a worktree folder would nest worktrees at launch).
@@ -451,7 +470,6 @@ pub async fn create(
         .map(|m| m.sort_order)
         .unwrap_or(0);
 
-    let txn = conn.begin().await?;
     let active = work_task::ActiveModel {
         id: NotSet,
         folder_id: Set(draft.folder_id),
@@ -487,10 +505,9 @@ pub async fn create(
         finished_at: Set(None),
         deleted_at: Set(None),
     };
-    let row = active.insert(&txn).await?;
-    record_event(&txn, row.id, "created", "user", None).await?;
-    txn.commit().await?;
-    Ok(to_info(row))
+    let row = active.insert(conn).await?;
+    record_event(conn, row.id, "created", "user", None).await?;
+    Ok(row)
 }
 
 /// Edit title/config. Only meaningful outside an active run: allowed in
@@ -632,6 +649,16 @@ async fn claim_inner(
 ) -> Result<Option<i32>, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
+    // Team materialization parks the whole DAG in `queued`; the pump's
+    // `next_queued` still refuses unmet children. User/auto claims cannot.
+    if actor != "team_orchestrator"
+        && !specos_runtime_service::dependencies_satisfied(&txn, id).await?
+    {
+        txn.rollback().await?;
+        return Err(DbError::Validation(
+            specos_runtime_service::UNMET_DEPENDENCY.into(),
+        ));
+    }
     let mut update = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -641,7 +668,10 @@ async fn claim_inner(
             work_task::Column::RunSeq,
             Expr::col(work_task::Column::RunSeq).add(1),
         )
-        .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
+        .col_expr(
+            work_task::Column::FailureReason,
+            Expr::value(None::<String>),
+        )
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
         // A fresh generation invalidates the previous run's self-reported
         // verdict (result_summary stays visible until the next settle).
@@ -661,7 +691,10 @@ async fn claim_inner(
             work_task::Column::ArchivedAt,
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
-        .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
+        .col_expr(
+            work_task::Column::FinishedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(from))
@@ -679,6 +712,11 @@ async fn claim_inner(
         .await?
         .map(|m| m.run_seq)
         .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    let run_task = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    specos_runtime_service::insert_run_snapshot(&txn, &run_task, run_seq, "queued").await?;
     // The instruction lands before the status change, so a newest-first scan
     // that stops at the first user action never has to reason about ordering
     // within this transaction.
@@ -740,16 +778,21 @@ pub async fn auto_claim_next(
     folder_id: i32,
     max_concurrent: i32,
 ) -> Result<Option<i32>, DbError> {
+    let mut skip: Vec<i32> = Vec::new();
     loop {
         // Head lookup runs outside the transaction so the write stays first;
         // the CAS below re-checks the status and simply retries on a miss.
-        let head = work_task::Entity::find()
+        let mut q = work_task::Entity::find()
             .filter(work_task::Column::DeletedAt.is_null())
             .filter(work_task::Column::FolderId.eq(folder_id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
             .filter(work_task::Column::ScheduledAt.is_null())
             .inner_join(folder::Entity)
-            .filter(folder::Column::DeletedAt.is_null())
+            .filter(folder::Column::DeletedAt.is_null());
+        if !skip.is_empty() {
+            q = q.filter(work_task::Column::Id.is_not_in(skip.iter().copied()));
+        }
+        let head = q
             .order_by_asc(work_task::Column::SortOrder)
             .order_by_asc(work_task::Column::Id)
             .one(conn)
@@ -769,14 +812,20 @@ pub async fn auto_claim_next(
                 work_task::Column::RunSeq,
                 Expr::col(work_task::Column::RunSeq).add(1),
             )
-            .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
+            .col_expr(
+                work_task::Column::FailureReason,
+                Expr::value(None::<String>),
+            )
             .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
             // Every claim invalidates the previous run's self-report — the
             // settle path reads `verdict` as "this generation's", so a value
             // carried in from an older run (review → cancel → requeue → todo)
             // would decide an outcome it knows nothing about.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
-            .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
+            .col_expr(
+                work_task::Column::FinishedAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            )
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
@@ -788,6 +837,11 @@ pub async fn auto_claim_next(
             // Someone moved the head (manual start, edit, delete, a plan) —
             // retry with the fresh head.
             txn.rollback().await?;
+            continue;
+        }
+        if !specos_runtime_service::dependencies_satisfied(&txn, head.id).await? {
+            txn.rollback().await?;
+            skip.push(head.id);
             continue;
         }
         if max_concurrent > 0 {
@@ -817,6 +871,12 @@ pub async fn auto_claim_next(
             Some(serde_json::json!({ "auto": true })),
         )
         .await?;
+        let run_task = work_task::Entity::find_by_id(head.id)
+            .one(&txn)
+            .await?
+            .ok_or_else(|| DbError::NotFound(format!("work task {}", head.id)))?;
+        specos_runtime_service::insert_run_snapshot(&txn, &run_task, run_task.run_seq, "queued")
+            .await?;
         txn.commit().await?;
         return Ok(Some(head.id));
     }
@@ -958,14 +1018,20 @@ pub async fn requeue_canceled(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Todo)),
         )
-        .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
+        .col_expr(
+            work_task::Column::FailureReason,
+            Expr::value(None::<String>),
+        )
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
         .col_expr(
             work_task::Column::ArchivedAt,
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
-        .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
+        .col_expr(
+            work_task::Column::FinishedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Canceled))
@@ -1075,6 +1141,7 @@ pub async fn begin_setup(
         None,
     )
     .await?;
+    specos_runtime_service::update_run_state(&txn, id, run_seq, "preparing", None, false).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1163,6 +1230,15 @@ pub async fn mark_running(
         None,
     )
     .await?;
+    specos_runtime_service::update_run_state(
+        &txn,
+        id,
+        run_seq,
+        "running",
+        Some(conversation_id),
+        false,
+    )
+    .await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1245,6 +1321,16 @@ pub async fn fail(
         Some(serde_json::json!({ "reason": reason, "error": error })),
     )
     .await?;
+    let effective_seq = if let Some(seq) = run_seq {
+        seq
+    } else {
+        work_task::Entity::find_by_id(id)
+            .one(&txn)
+            .await?
+            .map(|t| t.run_seq)
+            .unwrap_or_default()
+    };
+    specos_runtime_service::update_run_state(&txn, id, effective_seq, "failed", None, true).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1324,8 +1410,14 @@ pub async fn settle_review(
             work_task::Column::FilesChanged,
             Expr::value(stats.map(|s| s.0)),
         )
-        .col_expr(work_task::Column::Additions, Expr::value(stats.map(|s| s.1)))
-        .col_expr(work_task::Column::Deletions, Expr::value(stats.map(|s| s.2)))
+        .col_expr(
+            work_task::Column::Additions,
+            Expr::value(stats.map(|s| s.1)),
+        )
+        .col_expr(
+            work_task::Column::Deletions,
+            Expr::value(stats.map(|s| s.2)),
+        )
         .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
         // A fresh review starts with a fresh light; the preflight runner
         // rewrites it right after when one is configured.
@@ -1346,6 +1438,7 @@ pub async fn settle_review(
         return Ok(false);
     }
     status_changed_event(&txn, id, "engine", None, WorkTaskStatus::Review, None).await?;
+    specos_runtime_service::update_run_state(&txn, id, run_seq, "review", None, true).await?;
     if let Some((files, adds, dels)) = stats {
         record_event(
             &txn,
@@ -1457,6 +1550,11 @@ pub async fn begin_merge(
         .map(|m| m.run_seq)
         .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
     let actor = if auto { "auto" } else { "user" };
+    let run_task = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    specos_runtime_service::insert_run_snapshot(&txn, &run_task, run_seq, "merging").await?;
     record_event(
         &txn,
         id,
@@ -1492,6 +1590,9 @@ pub async fn merge_landed(
     id: i32,
     merge_commit: &str,
 ) -> Result<bool, DbError> {
+    if let Some(path) = specos_runtime_service::folder_path_for_task(conn, id).await? {
+        specos_runtime_service::assert_integration_landing(conn, id, &path, merge_commit).await?;
+    }
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -1523,6 +1624,12 @@ pub async fn merge_landed(
         Some(serde_json::json!({ "merge_commit": merge_commit })),
     )
     .await?;
+    let run_seq = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .map(|t| t.run_seq)
+        .unwrap_or_default();
+    specos_runtime_service::update_run_state(&txn, id, run_seq, "done", None, true).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1569,6 +1676,12 @@ pub async fn complete_without_merge(
         Some(serde_json::json!({ "reason": reason })),
     )
     .await?;
+    let run_seq = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .map(|t| t.run_seq)
+        .unwrap_or_default();
+    specos_runtime_service::update_run_state(&txn, id, run_seq, "done", None, true).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1797,6 +1910,12 @@ pub async fn cancel(
         .filter(|r| !r.is_empty())
         .map(|r| serde_json::json!({ "reason": r }));
     status_changed_event(&txn, id, "user", None, WorkTaskStatus::Canceled, extra).await?;
+    let run_seq = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .map(|t| t.run_seq)
+        .unwrap_or_default();
+    specos_runtime_service::update_run_state(&txn, id, run_seq, "canceled", None, true).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1815,7 +1934,11 @@ pub async fn set_cleanup_state(
     work_task::Entity::update_many()
         .col_expr(
             work_task::Column::CleanupState,
-            Expr::value(if failed { Some("failed".to_string()) } else { None }),
+            Expr::value(if failed {
+                Some("failed".to_string())
+            } else {
+                None
+            }),
         )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -1838,7 +1961,10 @@ pub async fn set_cleanup_state(
 /// Detach the (now removed) worktree from the task and clear any cleanup flag.
 pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
     work_task::Entity::update_many()
-        .col_expr(work_task::Column::WorktreeFolderId, Expr::value(None::<i32>))
+        .col_expr(
+            work_task::Column::WorktreeFolderId,
+            Expr::value(None::<i32>),
+        )
         .col_expr(work_task::Column::CleanupState, Expr::value(None::<String>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(work_task::Column::Id.eq(id))
@@ -1973,10 +2099,7 @@ pub async fn settings_get_own(
 
 /// Drop the folder's own settings row so it follows the global defaults
 /// again. Idempotent — a folder without a row is left as-is.
-pub async fn settings_delete(
-    conn: &DatabaseConnection,
-    folder_id: i32,
-) -> Result<(), DbError> {
+pub async fn settings_delete(conn: &DatabaseConnection, folder_id: i32) -> Result<(), DbError> {
     work_task_settings::Entity::delete_many()
         .filter(work_task_settings::Column::FolderId.eq(folder_id))
         .exec(conn)
@@ -2079,7 +2202,9 @@ pub async fn template_save(
         return Err(DbError::Validation("template title is required".into()));
     }
     if !draft.config.is_object() {
-        return Err(DbError::Validation("template config must be an object".into()));
+        return Err(DbError::Validation(
+            "template config must be an object".into(),
+        ));
     }
     let config = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("template config not serializable: {e}")))?;
@@ -2112,7 +2237,9 @@ pub async fn template_save(
 }
 
 pub async fn template_delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
-    work_task_template::Entity::delete_by_id(id).exec(conn).await?;
+    work_task_template::Entity::delete_by_id(id)
+        .exec(conn)
+        .await?;
     Ok(())
 }
 
@@ -2125,9 +2252,8 @@ fn contract_to_info(m: work_task_contract::Model) -> Result<WorkTaskContractInfo
         serde_json::from_str(&m.acceptance_criteria).map_err(|e| {
             DbError::Validation(format!("stored contract AC snapshot invalid: {e}"))
         })?;
-    let gate_policy: WorkTaskGatePolicy = serde_json::from_str(&m.gate_policy).map_err(|e| {
-        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
-    })?;
+    let gate_policy: WorkTaskGatePolicy = serde_json::from_str(&m.gate_policy)
+        .map_err(|e| DbError::Validation(format!("stored contract gate policy invalid: {e}")))?;
     Ok(WorkTaskContractInfo {
         task_id: m.task_id,
         source_spec_id: m.source_spec_id,
@@ -2232,9 +2358,8 @@ pub async fn contract_preflight_gates<C: ConnectionTrait>(
     let Some(contract) = get_contract(conn, task_id).await? else {
         return Ok(Vec::new());
     };
-    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
-        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
-    })?;
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy)
+        .map_err(|e| DbError::Validation(format!("stored contract gate policy invalid: {e}")))?;
     Ok(policy
         .gates
         .into_iter()
@@ -2340,12 +2465,20 @@ pub async fn gate_decision<C: ConnectionTrait>(
         .one(conn)
         .await?
         .ok_or_else(|| DbError::NotFound(format!("work task {task_id}")))?;
-    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
-        DbError::Validation(format!("stored contract gate policy invalid: {e}"))
-    })?;
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy)
+        .map_err(|e| DbError::Validation(format!("stored contract gate policy invalid: {e}")))?;
     let rows = list_gate_results(conn, task_id, None).await?;
-    let attempts = rows.iter().filter_map(gate_attempt_input).collect::<Vec<_>>();
-    Ok(evaluate(&policy, &attempts, task.run_seq, spec_stale, current_head))
+    let attempts = rows
+        .iter()
+        .filter_map(gate_attempt_input)
+        .collect::<Vec<_>>();
+    Ok(evaluate(
+        &policy,
+        &attempts,
+        task.run_seq,
+        spec_stale,
+        current_head,
+    ))
 }
 
 fn gate_attempt_input(m: &work_task_gate_result::Model) -> Option<GateAttemptInput> {
@@ -2392,7 +2525,9 @@ mod tests {
         no_prompt.config = serde_json::json!({ "display_text": "", "prompt_blocks": [] });
         assert!(create(&db.conn, no_prompt).await.is_err());
 
-        let t = create(&db.conn, draft(folder_id, "fix login")).await.unwrap();
+        let t = create(&db.conn, draft(folder_id, "fix login"))
+            .await
+            .unwrap();
         assert_eq!(t.status, WorkTaskStatus::Todo);
         assert_eq!(t.run_seq, 0);
 
@@ -2422,7 +2557,10 @@ mod tests {
                 .unwrap(),
             None
         );
-        assert_eq!(get(&db.conn, t.id).await.unwrap().status, WorkTaskStatus::Queued);
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().status,
+            WorkTaskStatus::Queued
+        );
     }
 
     #[tokio::test]
@@ -2467,7 +2605,9 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/wt-preparing").await;
 
         // Canceled mid-setup (the init command is still installing).
-        let canceled = create(&db.conn, draft(folder_id, "canceled")).await.unwrap();
+        let canceled = create(&db.conn, draft(folder_id, "canceled"))
+            .await
+            .unwrap();
         let seq = claim_for_run(&db.conn, canceled.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap()
@@ -2525,7 +2665,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(start_running(&db.conn, running.id, seq, 1, "c1").await.unwrap());
+        assert!(start_running(&db.conn, running.id, seq, 1, "c1")
+            .await
+            .unwrap());
         let queued = create(&db.conn, draft(folder_id, "queued")).await.unwrap();
         claim_for_run(&db.conn, queued.id, WorkTaskStatus::Todo, "user")
             .await
@@ -2541,7 +2683,9 @@ mod tests {
 
         // The running task settles → a slot frees → the head is claimed with a
         // fresh generation and an engine-actor event.
-        assert!(settle_review(&db.conn, running.id, seq, None, None).await.unwrap());
+        assert!(settle_review(&db.conn, running.id, seq, None, None)
+            .await
+            .unwrap());
         assert_eq!(
             auto_claim_next(&db.conn, folder_id, 2).await.unwrap(),
             Some(todo.id)
@@ -2566,13 +2710,25 @@ mod tests {
         let b = create(&db.conn, draft(folder_id, "b")).await.unwrap();
         let c = create(&db.conn, draft(folder_id, "c")).await.unwrap();
 
-        assert_eq!(auto_claim_next(&db.conn, folder_id, 2).await.unwrap(), Some(a.id));
-        assert_eq!(auto_claim_next(&db.conn, folder_id, 2).await.unwrap(), Some(b.id));
+        assert_eq!(
+            auto_claim_next(&db.conn, folder_id, 2).await.unwrap(),
+            Some(a.id)
+        );
+        assert_eq!(
+            auto_claim_next(&db.conn, folder_id, 2).await.unwrap(),
+            Some(b.id)
+        );
         // Two queued spend the budget; c stays visible in todo.
         assert_eq!(auto_claim_next(&db.conn, folder_id, 2).await.unwrap(), None);
-        assert_eq!(get(&db.conn, c.id).await.unwrap().status, WorkTaskStatus::Todo);
+        assert_eq!(
+            get(&db.conn, c.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
         // 0 = unlimited.
-        assert_eq!(auto_claim_next(&db.conn, folder_id, 0).await.unwrap(), Some(c.id));
+        assert_eq!(
+            auto_claim_next(&db.conn, folder_id, 0).await.unwrap(),
+            Some(c.id)
+        );
         assert_eq!(auto_claim_next(&db.conn, folder_id, 0).await.unwrap(), None);
     }
 
@@ -2750,7 +2906,9 @@ mod tests {
 
         // Wrong generation → rejected; current one records verdict + summary
         // (+ the agent_verdict event).
-        assert!(!set_verdict(&db.conn, t.id, seq + 1, "success", None).await.unwrap());
+        assert!(!set_verdict(&db.conn, t.id, seq + 1, "success", None)
+            .await
+            .unwrap());
         assert!(
             set_verdict(&db.conn, t.id, seq, "needs_review", Some("check the tests"))
                 .await
@@ -2764,8 +2922,12 @@ mod tests {
 
         // Settled tasks reject further reports; the next claim (a return from
         // review) invalidates the stale verdict.
-        assert!(settle_review(&db.conn, t.id, seq, None, None).await.unwrap());
-        assert!(!set_verdict(&db.conn, t.id, seq, "success", None).await.unwrap());
+        assert!(settle_review(&db.conn, t.id, seq, None, None)
+            .await
+            .unwrap());
+        assert!(!set_verdict(&db.conn, t.id, seq, "success", None)
+            .await
+            .unwrap());
         claim_for_run(&db.conn, t.id, WorkTaskStatus::Review, "user")
             .await
             .unwrap()
@@ -2782,12 +2944,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(start_running(&db.conn, t.id, seq, 1, "conn-1").await.unwrap());
+        assert!(start_running(&db.conn, t.id, seq, 1, "conn-1")
+            .await
+            .unwrap());
 
         // User cancels; a late TurnComplete for the old generation must be a
         // zero-side-effect no-op (the cancel-late-TurnComplete race).
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
-        assert!(!settle_review(&db.conn, t.id, seq, None, None).await.unwrap());
+        assert!(!settle_review(&db.conn, t.id, seq, None, None)
+            .await
+            .unwrap());
         assert!(!flip_awaiting(&db.conn, t.id, seq, true).await.unwrap());
         assert!(!fail(
             &db.conn,
@@ -2826,7 +2992,10 @@ mod tests {
                 .into_iter()
                 .find(|e| {
                     e.kind == "status_changed"
-                        && e.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str())
+                        && e.payload
+                            .as_ref()
+                            .and_then(|p| p.get("to"))
+                            .and_then(|v| v.as_str())
                             == Some("canceled")
                 })
                 .and_then(|e| e.payload)
@@ -2837,7 +3006,9 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/wt-cancel-reason").await;
 
         let told = create(&db.conn, draft(folder_id, "told")).await.unwrap();
-        assert!(cancel(&db.conn, told.id, Some("  wrong approach  ")).await.unwrap());
+        assert!(cancel(&db.conn, told.id, Some("  wrong approach  "))
+            .await
+            .unwrap());
         assert_eq!(
             cancel_reason(&db.conn, told.id).await.as_deref(),
             Some("wrong approach")
@@ -2861,10 +3032,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(start_running(&db.conn, t.id, seq, 1, "conn-1").await.unwrap());
-        assert!(settle_review(&db.conn, t.id, seq, Some("done".into()), Some((2, 10, 3)))
+        assert!(start_running(&db.conn, t.id, seq, 1, "conn-1")
             .await
             .unwrap());
+        assert!(
+            settle_review(&db.conn, t.id, seq, Some("done".into()), Some((2, 10, 3)))
+                .await
+                .unwrap()
+        );
 
         let state = WorkTaskMergeState {
             pre_merge_head: "abc123".into(),
@@ -2895,7 +3070,9 @@ mod tests {
         // A second landing (event vs recovery race) is a no-op.
         assert!(!merge_landed(&db.conn, t.id, "zzz").await.unwrap());
         // And nothing can pull a done task back to review.
-        assert!(!merge_back_to_review(&db.conn, t.id, None, None).await.unwrap());
+        assert!(!merge_back_to_review(&db.conn, t.id, None, None)
+            .await
+            .unwrap());
 
         let got = get(&db.conn, t.id).await.unwrap();
         assert_eq!(got.status, WorkTaskStatus::Done);
@@ -2920,7 +3097,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(start_running(&db.conn, t.id, seq, 1, "c").await.unwrap());
-        assert!(settle_review(&db.conn, t.id, seq, None, None).await.unwrap());
+        assert!(settle_review(&db.conn, t.id, seq, None, None)
+            .await
+            .unwrap());
         let state = WorkTaskMergeState {
             pre_merge_head: "abc".into(),
             message: "m".into(),
@@ -3152,7 +3331,11 @@ mod tests {
             .rfind(|e| e.kind == "status_changed")
             .expect("status change");
         assert_eq!(
-            settle.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str()),
+            settle
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("to"))
+                .and_then(|v| v.as_str()),
             Some("done")
         );
         // The caller's reason is what the timeline shows under the header.
@@ -3181,15 +3364,21 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        start_running(&db.conn, running.id, seq, 1, "c").await.unwrap();
+        start_running(&db.conn, running.id, seq, 1, "c")
+            .await
+            .unwrap();
 
         let merging = create(&db.conn, draft(folder_id, "m")).await.unwrap();
         let seq = claim_for_run(&db.conn, merging.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap()
             .unwrap();
-        start_running(&db.conn, merging.id, seq, 2, "c2").await.unwrap();
-        settle_review(&db.conn, merging.id, seq, None, None).await.unwrap();
+        start_running(&db.conn, merging.id, seq, 2, "c2")
+            .await
+            .unwrap();
+        settle_review(&db.conn, merging.id, seq, None, None)
+            .await
+            .unwrap();
         begin_merge(
             &db.conn,
             merging.id,
@@ -3214,10 +3403,12 @@ mod tests {
         assert_eq!(q.status, WorkTaskStatus::Failed);
         assert_eq!(q.failure_reason.as_deref(), Some("interrupted"));
         // The interrupted queued task retries idempotently: failed → queued.
-        assert!(claim_for_run(&db.conn, queued.id, WorkTaskStatus::Failed, "user")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            claim_for_run(&db.conn, queued.id, WorkTaskStatus::Failed, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Merging is exempt — its recovery goes through git truth.
         assert_eq!(
@@ -3238,7 +3429,9 @@ mod tests {
             .unwrap();
         start_running(&db.conn, t.id, seq, 1, "c").await.unwrap();
         assert_eq!(active_launched_count(&db.conn, folder_id).await.unwrap(), 1);
-        settle_review(&db.conn, t.id, seq, None, None).await.unwrap();
+        settle_review(&db.conn, t.id, seq, None, None)
+            .await
+            .unwrap();
         assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
         assert_eq!(active_launched_count(&db.conn, folder_id).await.unwrap(), 0);
 
@@ -3285,7 +3478,13 @@ mod tests {
         assert_eq!(s.max_concurrent, 5);
         assert_eq!(s.init_command.as_deref(), Some("pnpm install"));
         // The raw read is untouched by the fallback.
-        assert_eq!(settings_get(&db.conn, folder_id).await.unwrap().max_concurrent, 2);
+        assert_eq!(
+            settings_get(&db.conn, folder_id)
+                .await
+                .unwrap()
+                .max_concurrent,
+            2
+        );
 
         // Saving the folder's own settings detaches it entirely — no
         // field-by-field merge.
@@ -3374,7 +3573,9 @@ mod tests {
             output_tail: None,
         };
         // Stale generation / wrong status writes are no-ops.
-        assert!(!set_preflight(&db.conn, t.id, seq + 1, &light).await.unwrap());
+        assert!(!set_preflight(&db.conn, t.id, seq + 1, &light)
+            .await
+            .unwrap());
         assert!(set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
         light.status = "failed".into();
         light.exit_code = Some(2);
@@ -3382,7 +3583,10 @@ mod tests {
         assert!(set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
         let info = get(&db.conn, t.id).await.unwrap();
         assert_eq!(
-            info.preflight.as_ref().and_then(|p| p.get("status")).and_then(|s| s.as_str()),
+            info.preflight
+                .as_ref()
+                .and_then(|p| p.get("status"))
+                .and_then(|s| s.as_str()),
             Some("failed")
         );
         let events = list_events(&db.conn, t.id, 100).await.unwrap();
@@ -3396,7 +3600,9 @@ mod tests {
             .unwrap();
         assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
         assert!(start_running(&db.conn, t.id, seq2, 1, "c2").await.unwrap());
-        assert!(settle_review(&db.conn, t.id, seq2, None, None).await.unwrap());
+        assert!(settle_review(&db.conn, t.id, seq2, None, None)
+            .await
+            .unwrap());
         assert!(!set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
         assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
     }
@@ -3433,10 +3639,12 @@ mod tests {
         assert!(get(&db.conn, t.id).await.unwrap().archived_at.is_some());
 
         // …a retry claim resurrects it out of the archive…
-        assert!(claim_for_run(&db.conn, t.id, WorkTaskStatus::Failed, "user")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            claim_for_run(&db.conn, t.id, WorkTaskStatus::Failed, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(get(&db.conn, t.id).await.unwrap().archived_at.is_none());
 
         // …and so does requeueing an archived canceled task.
@@ -3460,8 +3668,12 @@ mod tests {
             config: serde_json::json!({ "display_text": title, "prompt_blocks": [] }),
         };
 
-        let a = template_save(&db.conn, &d("Release", "cut a release")).await.unwrap();
-        template_save(&db.conn, &d("Audit", "audit deps")).await.unwrap();
+        let a = template_save(&db.conn, &d("Release", "cut a release"))
+            .await
+            .unwrap();
+        template_save(&db.conn, &d("Audit", "audit deps"))
+            .await
+            .unwrap();
         // Same name replaces in place instead of duplicating.
         let a2 = template_save(&db.conn, &d("Release", "cut a patch release"))
             .await
@@ -3489,33 +3701,36 @@ mod tests {
             source_spec_id: Set("BUGRAIL-SPECOS-001".to_string()),
             source_spec_version: Set("0.3".to_string()),
             source_spec_path: Set(
-                ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md".to_string(),
+                ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md".to_string()
             ),
-            source_spec_hash: Set("81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d".to_string()),
-            acceptance_criteria: Set(
-                serde_json::json!([
-                    { "id": "AC01", "title": "Bind", "text": "Preview then bind stores exact metadata" }
-                ])
-                .to_string(),
+            source_spec_hash: Set(
+                "81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d".to_string(),
             ),
-            gate_policy: Set(
-                serde_json::json!({
-                    "gates": [{
-                        "id": "preflight",
-                        "type": "preflight",
-                        "required": true,
-                        "reusable": false,
-                        "allow_waiver": true
-                    }]
-                })
-                .to_string(),
-            ),
+            acceptance_criteria: Set(serde_json::json!([
+                { "id": "AC01", "title": "Bind", "text": "Preview then bind stores exact metadata" }
+            ])
+            .to_string()),
+            gate_policy: Set(serde_json::json!({
+                "gates": [{
+                    "id": "preflight",
+                    "type": "preflight",
+                    "required": true,
+                    "reusable": false,
+                    "allow_waiver": true
+                }]
+            })
+            .to_string()),
             created_at: Set(Utc::now()),
             updated_at: Set(Utc::now()),
         }
     }
 
-    fn gate_active(task_id: i32, run_seq: i32, gate_id: &str, status: &str) -> work_task_gate_result::ActiveModel {
+    fn gate_active(
+        task_id: i32,
+        run_seq: i32,
+        gate_id: &str,
+        status: &str,
+    ) -> work_task_gate_result::ActiveModel {
         work_task_gate_result::ActiveModel {
             id: NotSet,
             task_id: Set(task_id),
@@ -3527,7 +3742,9 @@ mod tests {
             reusable: Set(false),
             actor: Set("engine".to_string()),
             evidence: Set(None),
-            reason: Set(matches!(status, "failed" | "blocked" | "waived").then(|| "why".to_string())),
+            reason: Set(
+                matches!(status, "failed" | "blocked" | "waived").then(|| "why".to_string())
+            ),
             started_at: Set(Utc::now()),
             finished_at: Set((status != "running").then(Utc::now)),
         }
@@ -3563,7 +3780,10 @@ mod tests {
         assert_eq!(contract.gate_policy.gates.len(), 1);
         let events = list_events(&db.conn, t.id, 100).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "spec_contract_bound"));
-        assert_eq!(list_gate_results(&db.conn, t.id, None).await.unwrap().len(), 1);
+        assert_eq!(
+            list_gate_results(&db.conn, t.id, None).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -3589,15 +3809,23 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-specos-cascade").await;
         let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
-        upsert_contract(&db.conn, contract_active(t.id)).await.unwrap();
+        upsert_contract(&db.conn, contract_active(t.id))
+            .await
+            .unwrap();
         insert_gate_result(&db.conn, gate_active(t.id, 0, "preflight", "passed"))
             .await
             .unwrap();
 
-        work_task::Entity::delete_by_id(t.id).exec(&db.conn).await.unwrap();
+        work_task::Entity::delete_by_id(t.id)
+            .exec(&db.conn)
+            .await
+            .unwrap();
 
         assert!(get_contract(&db.conn, t.id).await.unwrap().is_none());
-        assert!(list_gate_results(&db.conn, t.id, None).await.unwrap().is_empty());
+        assert!(list_gate_results(&db.conn, t.id, None)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -3643,7 +3871,9 @@ mod tests {
         let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
         assert!(d.eligible && d.required.is_empty());
 
-        upsert_contract(&db.conn, contract_active(t.id)).await.unwrap();
+        upsert_contract(&db.conn, contract_active(t.id))
+            .await
+            .unwrap();
 
         // No attempt yet → unmet.
         let d = gate_decision(&db.conn, t.id, None, false).await.unwrap();
@@ -3680,36 +3910,42 @@ mod tests {
         let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
 
         let mut active = contract_active(t.id);
-        active.gate_policy = Set(
-            serde_json::json!({
-                "gates": [{
-                    "id": "preflight",
-                    "type": "preflight",
-                    "required": true,
-                    "reusable": true,
-                    "allow_waiver": false
-                }]
-            })
-            .to_string(),
-        );
+        active.gate_policy = Set(serde_json::json!({
+            "gates": [{
+                "id": "preflight",
+                "type": "preflight",
+                "required": true,
+                "reusable": true,
+                "allow_waiver": false
+            }]
+        })
+        .to_string());
         upsert_contract(&db.conn, active).await.unwrap();
 
         // Passing reusable result from an old run whose verified_head is head1.
         let mut gate = gate_active(t.id, 1, "preflight", "passed");
         gate.reusable = Set(true);
-        gate.evidence = Set(Some(serde_json::json!({ "verified_head": "head1" }).to_string()));
+        gate.evidence = Set(Some(
+            serde_json::json!({ "verified_head": "head1" }).to_string(),
+        ));
         insert_gate_result(&db.conn, gate).await.unwrap();
 
         // Fresh task run_seq is 0; matching head → reusable result applies.
-        let d = gate_decision(&db.conn, t.id, Some("head1"), false).await.unwrap();
+        let d = gate_decision(&db.conn, t.id, Some("head1"), false)
+            .await
+            .unwrap();
         assert!(d.eligible, "matching reusable result passes");
 
         // HEAD moved → the reusable result no longer applies.
-        let d = gate_decision(&db.conn, t.id, Some("head2"), false).await.unwrap();
+        let d = gate_decision(&db.conn, t.id, Some("head2"), false)
+            .await
+            .unwrap();
         assert!(!d.eligible);
 
         // Spec changed → not applicable either.
-        let d = gate_decision(&db.conn, t.id, Some("head1"), true).await.unwrap();
+        let d = gate_decision(&db.conn, t.id, Some("head1"), true)
+            .await
+            .unwrap();
         assert!(!d.eligible);
     }
 }

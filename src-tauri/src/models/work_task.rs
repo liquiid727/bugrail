@@ -113,12 +113,28 @@ pub struct WorkTaskConfig {
     /// Per-task agent override. `None` = inherit folder settings.
     #[serde(default)]
     pub agent_type: Option<String>,
+    /// Logical role selection. The runtime resolver maps this to an existing
+    /// ACP adapter; absent keeps the legacy `agent_type` precedence.
+    #[serde(default)]
+    pub agent_profile_id: Option<String>,
+    #[serde(default)]
+    pub model_profile_id: Option<String>,
+    #[serde(default)]
+    pub context_loadout_id: Option<String>,
+    #[serde(default)]
+    pub team_run_id: Option<String>,
+    #[serde(default)]
+    pub team_node_id: Option<String>,
     #[serde(default)]
     pub mode_id: Option<String>,
     #[serde(default)]
     pub config_values: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub label_snapshot: Option<serde_json::Value>,
+    /// Captured integration-source heads for this generation. Absent on
+    /// ordinary implementation tasks.
+    #[serde(default)]
+    pub integration_snapshot: Option<crate::models::IntegrationSnapshot>,
 }
 
 /// Per-folder defaults stored in `work_task_settings.config`.

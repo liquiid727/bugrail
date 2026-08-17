@@ -8,6 +8,8 @@ import {
   ListChevronsUpDown,
   Search,
   ListTodo,
+  Network,
+  LibraryBig,
   SquarePen,
   Zap,
   type LucideIcon,
@@ -493,6 +495,18 @@ export function Sidebar() {
               </span>
             ) : null
           }
+        />
+        <SidebarNavButton
+          icon={Network}
+          label={t("teams")}
+          active={routeId === "teams"}
+          onClick={() => setRoute("teams")}
+        />
+        <SidebarNavButton
+          icon={LibraryBig}
+          label={t("context")}
+          active={routeId === "context"}
+          onClick={() => setRoute("context")}
         />
       </div>
 

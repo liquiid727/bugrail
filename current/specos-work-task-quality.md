@@ -1,5 +1,9 @@
 # SpecOS WorkTask Quality Handoff
 
+> Historical handoff for `BUGRAIL-SPECOS-001`. Its “not started” statement is
+> superseded by `current/specos-agent-team-context.md`; retained to preserve the
+> original approval trail.
+
 ## Meta
 
 - Date: `2026-08-09`
