@@ -63,6 +63,7 @@ import { SystemNetworkSettings } from "./system-network-settings"
 import { UpdateProvider } from "@/components/providers/update-provider"
 import enMessages from "@/i18n/messages/en.json"
 import { getSystemProxySettings } from "@/lib/api"
+import { openUrl } from "@/lib/platform"
 
 const mockGetProxy = vi.mocked(getSystemProxySettings)
 
@@ -235,6 +236,12 @@ describe("SystemNetworkSettings — update source outage", () => {
     expect(
       await screen.findByRole("button", { name: "View v0.16.0 release" })
     ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: "View v0.16.0 release" })
+    )
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://github.com/liquiid727/bugrail/releases/latest"
+    )
     expect(
       screen.queryByRole("button", { name: "Upgrade to v0.16.0" })
     ).not.toBeInTheDocument()

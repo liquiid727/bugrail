@@ -202,7 +202,15 @@ pub struct TokenUsageReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsageFolderFacet {
     pub folder_id: i32,
+    /// Compact display name — the alias when one is set, else the folder name.
+    /// Kept for callers that only have room for one string; the filter list
+    /// renders `alias [ name ]` from the two fields below instead, so an
+    /// aliased folder never hides which directory it actually is.
     pub label: String,
+    /// The folder's real (on-disk) directory name, alias or not.
+    pub name: String,
+    /// The user-set display alias, or `None` when unset.
+    pub alias: Option<String>,
     pub path: String,
     /// Set when this folder is a worktree created under another folder — the
     /// UI nests it so picking the parent visibly covers it.
@@ -246,9 +254,16 @@ pub struct TokenUsageSyncResult {
     pub synced: u32,
     /// Conversations skipped because nothing changed since the last pass.
     pub skipped: u32,
-    /// Conversations whose transcript could not be parsed. Their previous facts
-    /// are left untouched.
+    /// Conversations that hit a real fault — a transcript that would not parse,
+    /// a write that errored. Their previous facts are left untouched and the
+    /// next pass retries them. This is the only counter the UI treats as bad
+    /// news, so it must never carry a state the user cannot act on.
     pub failed: u32,
+    /// Conversations whose transcript is gone. Their recorded facts are kept
+    /// exactly as they were and their stamp is settled, so a source that can
+    /// never be re-derived stops being re-attempted (and re-reported) on every
+    /// pass. Not a failure: nothing was lost that was not already lost on disk.
+    pub lost: u32,
     pub turns_written: u64,
     pub tokens_written: u64,
     /// Fact rows dropped because their conversation no longer exists.

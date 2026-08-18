@@ -51,7 +51,7 @@ pub struct CheckItem {
 /// `None` on [`PreflightResult`] for every non-adapter agent.
 #[derive(Debug, Clone, Serialize)]
 pub struct AdapterInfo {
-    /// npm spec codeg installs, e.g. "@agentclientprotocol/claude-agent-acp@0.63.0".
+    /// npm spec codeg installs, e.g. "@agentclientprotocol/claude-agent-acp@0.69.0".
     pub adapter_package: String,
     /// Command the launch gate resolves, e.g. "claude-agent-acp".
     pub adapter_cmd: String,
@@ -381,9 +381,10 @@ fn build_node_version_check(current_version: Option<&str>, required: &str) -> Ch
     }
 }
 
-/// Preflight for `Uvx` agents (Python ACP agents launched via `uvx`, e.g.
-/// Hermes). Passes when either the `uv` tool runner is resolvable, or — as a
-/// fallback — the agent's own CLI is already installed on PATH.
+/// Preflight for `Uvx` agents (custom ACP agents distributed as Python
+/// packages and launched via `uvx`). Passes when either the `uv` tool runner
+/// is resolvable, or — as a fallback — the agent's own CLI is already
+/// installed on PATH.
 async fn check_uv_environment(
     uv_required: Option<&str>,
     system_cmd: Option<(&str, &[&str])>,
@@ -723,7 +724,7 @@ mod adapter_tests {
         );
         assert_eq!(
             info.adapter_package,
-            "@agentclientprotocol/claude-agent-acp@0.64.1"
+            "@agentclientprotocol/claude-agent-acp@0.69.0"
         );
         assert_eq!(info.adapter_cmd, "claude-agent-acp");
         assert!(!info.adapter_installed);
@@ -737,7 +738,7 @@ mod adapter_tests {
     #[test]
     fn codex_adapter_info_uses_codex_home() {
         let info = info_for(AgentType::Codex, None, true);
-        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@1.1.9");
+        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@1.4.0");
         assert_eq!(info.adapter_cmd, "codex-acp");
         assert!(info.adapter_installed);
         assert_eq!(info.native_cmd, "codex");

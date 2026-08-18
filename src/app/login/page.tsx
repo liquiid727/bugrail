@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { isDesktop } from "@/lib/platform"
+import { PRODUCT_MANIFEST } from "@/lib/product-manifest"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -13,8 +14,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    document.title = t("documentTitle")
-  }, [t])
+    document.title = PRODUCT_MANIFEST.displayName
+  }, [])
 
   // Desktop users skip login entirely
   if (isDesktop()) {
@@ -57,7 +58,9 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="w-full max-w-sm space-y-6 px-4">
         <div className="space-y-2 text-center">
-          <h1 className="text-2xl font-bold tracking-tight">{t("brand")}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {PRODUCT_MANIFEST.displayName}
+          </h1>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
 

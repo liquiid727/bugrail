@@ -5,12 +5,13 @@ import { useTranslations } from "next-intl"
 import { AppTitleBar } from "@/components/layout/app-title-bar"
 import { AppToaster } from "@/components/ui/app-toaster"
 import { ProjectBootWorkspace } from "@/components/project-boot/project-boot-workspace"
+import { formatProductTitle } from "@/lib/product-manifest"
 
 function ProjectBootPageInner() {
   const t = useTranslations("ProjectBoot")
 
   useEffect(() => {
-    document.title = `${t("title")} - codeg`
+    document.title = formatProductTitle(t("title"))
   }, [t])
 
   return (

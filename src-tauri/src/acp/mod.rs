@@ -1,5 +1,6 @@
 pub mod background_watch;
 pub mod binary_cache;
+pub mod chat_authoring;
 pub mod codex_catalog_source;
 pub mod codex_goal;
 pub mod codex_model_catalog;
@@ -11,6 +12,7 @@ pub mod event_stream;
 pub mod feedback;
 pub mod file_system_runtime;
 pub mod fork;
+pub mod host_tools_policy;
 pub mod idle_sweep;
 pub mod internal_bus;
 pub mod lifecycle;

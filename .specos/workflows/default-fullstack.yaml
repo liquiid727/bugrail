@@ -1,0 +1,28 @@
+id: default-fullstack
+name: BugRail Default Fullstack
+inputs:
+  - idea
+  - prd
+outputs:
+  - prd
+  - design
+  - roadmap
+  - feature-spec
+  - test-spec
+  - issues
+  - implementation
+  - reviews
+  - tests
+gates:
+  - product intent or accepted prd exists inside bugrail
+  - existing CodeG modules are mapped before new modules are proposed
+  - design and applicable ADRs are accepted
+  - roadmap is updated
+  - feature spec is approved with a stable version and hash
+  - test spec is independently bound to that exact version and hash
+  - implementation and verification issues are generated separately
+  - code, migration, error, compatibility, and UI state impacts are covered
+  - normalized independent results exist
+  - review has no blocking findings
+  - ci and release gates pass
+

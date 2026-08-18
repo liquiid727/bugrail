@@ -1,8 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "codeg",
-  "version": "0.23.2",
-  "identifier": "app.codeg",
+"productName": "Bugrail",
+  "version": "0.26.1",
+  "identifier": "io.liquiid.bugrail",
+  "mainBinaryName": "codeg",
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "devUrl": "http://localhost:3000",
@@ -39,9 +40,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OEM3NkMyMTVENjdBODgKUldTSWV0WVZ3bmFNU0NnSzhpdFg2bXFmMHFidWd1eWpuZ2Y2WmU5QmVXdWVrU0ZpOCt2dnd6WW4K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzQzc5Q0M1ODM1M0MyRUMKUldUc3dsT0R4WnpIOCtNSFUwRVlrSlJ4VGdvN3VTZWJteDB6L1RwWjZlU1FvRUpVNVFPUFZKNnkK",
       "endpoints": [
-        "https://github.com/xintaofei/codeg/releases/latest/download/latest.json"
+        "https://github.com/liquiid727/bugrail/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

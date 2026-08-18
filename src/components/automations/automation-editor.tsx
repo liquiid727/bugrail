@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { getAgentLabel } from "@/lib/custom-agents"
-import { ArrowLeft, Folder, Globe, Wand2 } from "lucide-react"
+import { ArrowLeft, Globe, Wand2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { AgentSelector } from "@/components/chat/agent-selector"
@@ -10,13 +10,10 @@ import {
   RichComposer,
   type RichComposerHandle,
 } from "@/components/chat/composer/rich-composer"
-import {
-  useReferenceSearch,
-  type ReferenceGroupLabels,
-} from "@/components/chat/composer/use-reference-search"
+import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
+import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { docToPromptBlocks } from "@/components/chat/composer/to-prompt-blocks"
 import { isComposerChromeClick } from "@/components/chat/composer/composer-commands"
-import type { MentionUiLabels } from "@/components/chat/composer/suggestion/types"
 import {
   AgentConfigSection,
   effectiveSelections,
@@ -33,13 +30,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { FolderSelect } from "@/components/shared/folder-select"
 import { cn } from "@/lib/utils"
 import { automationComputeNextRun } from "@/lib/api"
 import type {
@@ -85,8 +76,6 @@ export function AutomationEditor({
   onBackToTemplates,
 }: AutomationEditorProps) {
   const t = useTranslations("Automations")
-  // The @-mention panel chrome reuses the chat composer's existing keys.
-  const tComposer = useTranslations("Folder.chat.messageInput")
   const folders = useAppWorkspaceStore((s) => s.folders)
 
   const [name, setName] = useState(automation?.name ?? "")
@@ -158,26 +147,8 @@ export function AutomationEditor({
   // config snapshot scoped to the right folder.
   const folderPathResolving = folderId != null && folderPath == null
 
-  const referenceGroupLabels = useMemo<ReferenceGroupLabels>(
-    () => ({
-      file: tComposer("mentionGroupFile"),
-      agent: tComposer("mentionGroupAgent"),
-      session: tComposer("mentionGroupSession"),
-      commit: tComposer("mentionGroupCommit"),
-      skill: tComposer("mentionGroupSkill"),
-    }),
-    [tComposer]
-  )
-  const mentionUiLabels = useMemo<MentionUiLabels>(
-    () => ({
-      empty: tComposer("mentionEmpty"),
-      loading: tComposer("mentionLoading"),
-      listbox: tComposer("mentionListLabel"),
-      more: tComposer("mentionMore"),
-      count: (count: number) => tComposer("mentionCount", { count }),
-    }),
-    [tComposer]
-  )
+  const { groupLabels: referenceGroupLabels, uiLabels: mentionUiLabels } =
+    useComposerMentionLabels()
   // Live data sources for the @ panel (files/agents/sessions/commits). All
   // transport-only — no live ACP session needed; just the folder path.
   const referenceSearch = useReferenceSearch({
@@ -493,33 +464,22 @@ export function AutomationEditor({
           {t("sectionTarget")}
         </h3>
         <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={folderId != null ? String(folderId) : undefined}
+          <FolderSelect
+            variant="field"
+            folders={selectableFolders}
+            value={folderId}
             // A branch belongs to a specific repo, so switching folders must drop
             // the previous folder's branch (else it'd be saved against the new
             // one). Done in this user-action handler, not a folderId effect, so
             // the initial hydrate/backfill never wipes a seeded branch on edit.
-            onValueChange={(v) => {
-              setFolderId(Number(v))
+            onChange={(id) => {
+              setFolderId(id)
               setBranch("")
               setIsRemoteBranch(false)
             }}
-          >
-            <SelectTrigger size="sm" className="h-7 gap-1.5 text-xs">
-              <Folder
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <SelectValue placeholder={t("folderPlaceholder")} />
-            </SelectTrigger>
-            <SelectContent>
-              {selectableFolders.map((f) => (
-                <SelectItem key={f.id} value={String(f.id)}>
-                  {f.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder={t("folderPlaceholder")}
+            title={t("folder")}
+          />
 
           {/* A worktree run gets its own fresh tree, so a branch only applies to
               the shared-folder case — the picker shows there and the checkbox

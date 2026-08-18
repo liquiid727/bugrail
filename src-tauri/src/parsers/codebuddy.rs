@@ -12,10 +12,10 @@ use crate::models::{
     ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
 use crate::parsers::{
-    compute_session_stats, folder_name_from_path, infer_context_window_max_tokens,
-    is_safe_subagent_id, latest_turn_total_usage_tokens, merge_context_window_stats,
-    relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    backfill_turn_durations, compute_session_stats, folder_name_from_path,
+    infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
+    merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
@@ -262,6 +262,7 @@ impl CodeBuddyParser {
                             tool_use_id: tool_call_id,
                             tool_name,
                             input_preview: tool_input_preview(&value),
+                            status: None,
                             meta: None,
                         }],
                         timestamp: ts,
@@ -308,6 +309,7 @@ impl CodeBuddyParser {
         relocate_orphaned_tool_results(&mut turns);
         structurize_read_tool_output(&mut turns);
         resolve_patch_line_numbers(&mut turns, cwd.as_deref());
+        backfill_turn_durations(&mut turns, &[]);
 
         let used_tokens = latest_turn_total_usage_tokens(&turns);
         let max_tokens = infer_context_window_max_tokens(model.as_deref());
@@ -887,6 +889,9 @@ fn agent_stats_from_subagent(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        // CodeBuddy's sub-agent transcript is a file under the parent session,
+        // not a session of its own.
+        child_session_id: None,
     })
 }
 

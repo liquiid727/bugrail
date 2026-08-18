@@ -486,22 +486,37 @@ const TOTAL_OUTPUT_LINES: &str = "Total output lines: ";
 /// agree — declared, present, and calls — and every line has to be a complete
 /// exec envelope, which is also what tells this blob apart from a single
 /// command's stdout that merely got truncated (the far more common banner).
-fn uncollapse_truncated_chunks(parsed: &CodeModeOutput, calls: usize) -> Option<Vec<String>> {
+fn uncollapse_truncated_chunks(blob: Option<&TruncatedBlob>, calls: usize) -> Option<Vec<String>> {
     if calls == 0 {
         return None;
     }
-    let (declared, body) = truncated_blob(parsed)?;
-    if body.len() != declared || declared != calls {
+    let blob = blob?;
+    if blob.body.len() != blob.declared || blob.declared != calls {
         return None;
     }
-    body.iter()
+    blob.body
+        .iter()
         .all(|line| unwrap_exec_chunk_envelope(line).is_some())
-        .then(|| body.iter().map(|line| line.to_string()).collect())
+        .then(|| blob.body.iter().map(|line| line.to_string()).collect())
 }
 
 /// The line count a collapsed blob declares, and the lines it actually kept.
-/// `declared > body.len()` means codex dropped lines to fit the cap.
-fn truncated_blob(parsed: &CodeModeOutput) -> Option<(usize, Vec<&str>)> {
+///
+/// Reading it costs a pass over the whole blob, and three of the paths below
+/// want it, so `unwrap_code_mode_script` reads it once and hands it down.
+struct TruncatedBlob<'a> {
+    declared: usize,
+    body: Vec<&'a str>,
+}
+
+impl TruncatedBlob<'_> {
+    /// Codex dropped lines from the middle to fit the cap.
+    fn truncated(&self) -> bool {
+        self.declared > self.body.len()
+    }
+}
+
+fn truncated_blob(parsed: &CodeModeOutput) -> Option<TruncatedBlob<'_>> {
     let [collapsed] = parsed.chunks.as_slice() else {
         return None;
     };
@@ -518,7 +533,10 @@ fn truncated_blob(parsed: &CodeModeOutput) -> Option<(usize, Vec<&str>)> {
     if !lines.next()?.is_empty() {
         return None;
     }
-    Some((declared, lines.collect()))
+    Some(TruncatedBlob {
+        declared,
+        body: lines.collect(),
+    })
 }
 
 /// One call's share of a collapsed blob that was split on the separator lines
@@ -571,14 +589,14 @@ const MIN_ANCHORS: usize = 2;
 /// it at the cost of the case this exists for — 89% of collapsed blobs are
 /// missing lines — so the split is kept and the labels are what it rests on.
 fn split_by_separators(
-    parsed: &CodeModeOutput,
+    blob: Option<&TruncatedBlob>,
     calls: &[CodeModeCall],
     separators: &[Separator],
 ) -> Option<Vec<SeparatorSlot>> {
     if calls.len() < 2 || separators.is_empty() {
         return None;
     }
-    let (_, body) = truncated_blob(parsed)?;
+    let body = &blob?.body;
 
     let labels: Option<Vec<&str>> = calls.iter().map(|c| c.label.as_deref()).collect();
     let by_index = |offset: usize| (0..calls.len()).map(|i| (i + offset).to_string()).collect();
@@ -590,10 +608,11 @@ fn split_by_separators(
         .chain([by_index(0), by_index(1)])
         .collect();
 
+    let index = index_body_lines(body);
     let mut best: Option<Vec<Option<usize>>> = None;
     for separator in separators {
         for values in &candidates {
-            let Some(found) = locate_anchors(&body, separator, values) else {
+            let Some(found) = locate_anchors(&index, separator, values) else {
                 continue;
             };
             let hits = found.iter().flatten().count();
@@ -609,14 +628,31 @@ fn split_by_separators(
         }
     }
 
-    Some(slots_from_anchors(&body, &best?))
+    Some(slots_from_anchors(body, &best?))
 }
 
-/// Where each value's separator line sits in `body`, or `None` for the ones
+/// Every line of the blob, trimmed of trailing whitespace, mapped to where it
+/// sits — or to `None` when it occurs more than once.
+///
+/// Built once and read by every candidate, which is what keeps the split from
+/// costing a pass over the blob per command: a run of separators is looked up,
+/// not searched for.
+fn index_body_lines<'a>(body: &[&'a str]) -> HashMap<&'a str, Option<usize>> {
+    let mut index = HashMap::with_capacity(body.len());
+    for (at, line) in body.iter().enumerate() {
+        index
+            .entry(line.trim_end())
+            .and_modify(|seen| *seen = None)
+            .or_insert(Some(at));
+    }
+    index
+}
+
+/// Where each value's separator line sits in the blob, or `None` for the ones
 /// truncation removed. Refuses the whole candidate when a line repeats or the
 /// lines run backwards — either means the match is not the separator run.
 fn locate_anchors(
-    body: &[&str],
+    index: &HashMap<&str, Option<usize>>,
     separator: &Separator,
     values: &[String],
 ) -> Option<Vec<Option<usize>>> {
@@ -625,16 +661,14 @@ fn locate_anchors(
 
     for value in values {
         let anchor = separator.anchor(value);
-        let anchor = anchor.trim_end();
-        let mut hits = body
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line.trim_end() == anchor)
-            .map(|(index, _)| index);
-        let hit = hits.next();
-        if hits.next().is_some() {
-            return None;
-        }
+        let hit = match index.get(anchor.trim_end()) {
+            // The line occurs twice, so it is not a boundary to cut on. Only a
+            // line some value actually predicts can refuse a candidate; an
+            // ordinary output line repeating is nobody's separator.
+            Some(None) => return None,
+            Some(Some(at)) => Some(*at),
+            None => None,
+        };
         if let Some(at) = hit {
             if previous.is_some_and(|before| at <= before) {
                 return None;
@@ -677,10 +711,11 @@ fn slots_from_anchors(body: &[&str], found: &[Option<usize>]) -> Vec<SeparatorSl
             Some((next_call, Some(at))) => (*at, *next_call),
             _ => (body.len(), found.len()),
         };
-        let text = body.get(start..end).unwrap_or_default().join("\n");
-        let text = text.trim_end();
+        let mut text = body.get(start..end).unwrap_or_default().join("\n");
+        let kept = text.trim_end().len();
+        text.truncate(kept);
         slots[*call] = SeparatorSlot {
-            text: (!text.is_empty()).then(|| text.to_string()),
+            text: (!text.is_empty()).then_some(text),
             placed: true,
             shares_with: (call + 1..next_call).collect(),
         };
@@ -803,7 +838,12 @@ fn unwrap_code_mode_script(
     // A collapsed blob stands in for the chunks it was rendered from, when the
     // counts prove which is which. Nothing changes when it does not: the
     // fallback is `parsed.chunks` itself, banner and all.
-    let uncollapsed = uncollapse_truncated_chunks(parsed, calls.len());
+    // Every path that reads it bails on the call count first, so a script that
+    // recovered nothing does not pay to have its blob split into lines.
+    let blob = (!calls.is_empty())
+        .then(|| truncated_blob(parsed))
+        .flatten();
+    let uncollapsed = uncollapse_truncated_chunks(blob.as_ref(), calls.len());
     let chunks: &[String] = uncollapsed.as_deref().unwrap_or(&parsed.chunks);
 
     if calls.len() == 1 {
@@ -818,6 +858,7 @@ fn unwrap_code_mode_script(
                 sessions,
                 poll_origins,
             )),
+            status: None,
             meta: codex_script_meta(call.label.as_deref(), false, &[], false),
         }];
         register_shell_sessions(call, call_id, &joined, sessions);
@@ -853,6 +894,7 @@ fn unwrap_code_mode_script(
                     sessions,
                     poll_origins,
                 )),
+                status: None,
                 meta: codex_script_meta(call.label.as_deref(), false, &[], false),
             });
             // Announcements are read from the chunks as written: unwrapping an
@@ -871,8 +913,8 @@ fn unwrap_code_mode_script(
     // The chunks did not divide, but the script may have labelled its results
     // on their way out. Only reachable for a collapsed blob — anything with real
     // chunks was already handled above.
-    if let Some(slots) = split_by_separators(parsed, calls, &script.separators) {
-        let truncated = truncated_blob(parsed).is_some_and(|(declared, body)| declared > body.len());
+    if let Some(slots) = split_by_separators(blob.as_ref(), calls, &script.separators) {
+        let truncated = blob.as_ref().is_some_and(TruncatedBlob::truncated);
         let last = calls.len() - 1;
         let mut uses = Vec::with_capacity(calls.len());
         let mut results = Vec::with_capacity(calls.len());
@@ -898,6 +940,7 @@ fn unwrap_code_mode_script(
                     sessions,
                     poll_origins,
                 )),
+                status: None,
                 meta: codex_script_meta(
                     call.label.as_deref(),
                     // A command that ran and printed nothing is not a command
@@ -1490,6 +1533,100 @@ fn is_error_collab_status(status: &str) -> bool {
     matches!(status, "errored" | "failed" | "notFound")
 }
 
+/// Prefix of codex's encrypted payload envelope — a Fernet token, whose version
+/// byte `0x80` always base64s to `gA`. codex uses it for `reasoning`'s
+/// `encrypted_content` and, since 0.147, for the inter-agent `message` a
+/// `spawn_agent` / `send_message` carries.
+const CODEX_ENCRYPTED_PREFIX: &str = "gAAAAA";
+
+/// Shortest blob worth treating as an envelope: the token's own header (version
+/// byte + 8-byte timestamp + 16-byte IV + HMAC) is already well past this, so
+/// the bound only rules out a short string that merely starts the same way.
+const CODEX_ENCRYPTED_MIN_LEN: usize = 64;
+
+/// Whether a payload is one of codex's opaque encrypted envelopes rather than
+/// text a human wrote.
+///
+/// codex 0.147 encrypts every inter-agent message: what reaches the rollout for
+/// a `spawn_agent` is `"gAAAAABqgWsi0g7g…"`, ~500 characters of base64 that only
+/// codex can open. Rendering it verbatim is what put a wall of base64 in the
+/// sub-agent capsule's title and prompt. There is no plaintext to recover — the
+/// capsule simply shows no prompt.
+///
+/// Deliberately narrow: the exact prefix AND no whitespace AND long enough. A
+/// prompt that merely *contains* base64, or discusses one, still renders.
+fn is_encrypted_envelope(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with(CODEX_ENCRYPTED_PREFIX)
+        && trimmed.len() >= CODEX_ENCRYPTED_MIN_LEN
+        && !trimmed.chars().any(char::is_whitespace)
+}
+
+/// What an encrypted envelope renders as inside a tool card's argument preview.
+const CODEX_ENCRYPTED_PLACEHOLDER: &str = "[encrypted]";
+
+/// Synthetic input key marking a sub-agent capsule as ONLY a launch — the card
+/// settles when codex acknowledges the spawn, not when the child finishes (see
+/// the frontend `agent-tool-call.tsx`, which turns it into a translated note).
+///
+/// Only codex 0.147's native team-of-agents needs it. In the older collab flow
+/// the spawn capsule really did stand for the sub-agent's run, because a
+/// `wait_agent` / `close_agent` capsule carried its result; 0.147 emits neither,
+/// so an unmarked "completed" would claim a still-running child had finished.
+///
+/// Public because the LIVE path writes the same key
+/// (`acp/connection.rs::classify_codex_subagent_activity`) — streaming and
+/// reload must not disagree about what the card means.
+pub const CODEX_SUBAGENT_LAUNCH_KEY: &str = "__codegCodexSubagentLaunch";
+
+/// Whether a `spawn_agent`'s arguments are codex 0.147's native team-of-agents
+/// shape: `task_name` and no `agent_type` (which that release removed).
+fn is_native_team_spawn(args: Option<&serde_json::Value>) -> bool {
+    args.is_some_and(|a| a.get("agent_type").is_none() && a.get("task_name").is_some())
+}
+
+/// Replace every encrypted envelope inside a parsed argument tree with
+/// [`CODEX_ENCRYPTED_PLACEHOLDER`], returning whether anything was replaced.
+///
+/// `spawn_agent` is not the only carrier: `send_message` (the collaboration call
+/// a parent uses to talk to a running sub-agent, and a sub-agent to answer)
+/// takes the same sealed `message`, and it has no capsule of its own — it lands
+/// on the generic tool card, whose preview is the whole argument JSON. Without
+/// this, that card shows ~500 characters of base64. Nothing is lost by
+/// replacing it: only codex can open the envelope.
+///
+/// Recurses so a nested payload is caught too, and reports whether it changed
+/// anything so the caller can leave every other tool's preview byte-identical.
+fn redact_encrypted_args(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => {
+            if is_encrypted_envelope(s) {
+                *s = CODEX_ENCRYPTED_PLACEHOLDER.to_string();
+                return true;
+            }
+            false
+        }
+        serde_json::Value::Array(items) => redact_encrypted_children(items.iter_mut()),
+        serde_json::Value::Object(map) => redact_encrypted_children(map.values_mut()),
+        _ => false,
+    }
+}
+
+/// Redact every child of a container and report whether any of them changed.
+///
+/// Deliberately a loop and not `Iterator::any`: the return value is a
+/// by-product, the traversal is the point, and `any` short-circuits — it would
+/// leave every envelope after the first one unredacted.
+fn redact_encrypted_children<'a>(
+    children: impl Iterator<Item = &'a mut serde_json::Value>,
+) -> bool {
+    let mut changed = false;
+    for child in children {
+        changed |= redact_encrypted_args(child);
+    }
+    changed
+}
+
 /// Add `agent_id` to a spawn execution capsule's input JSON (the
 /// `{subagent_type,prompt,description}` object), so the card can show the
 /// sub-agent UUID. Tolerates a missing/!object input by starting fresh.
@@ -1531,6 +1668,35 @@ fn extract_wait_agent_status(value: &serde_json::Value) -> (String, Option<Strin
 /// routes through the same `CollabAgentCard` as the live `wait` capsule (matches
 /// the shape `collab-tool.ts` `parseCollabToolInput` expects). Caller guarantees
 /// `status` is non-empty.
+/// Build the history capsule for codex 0.147's `wait_agent`, whose output is
+/// `{"message":"Wait completed.","timed_out":false}` — no per-agent map at all.
+///
+/// It stays worth showing even though it carries nothing: with the native
+/// team-of-agents the spawn capsule settles the instant codex acknowledges the
+/// launch, so this wait is the ONLY thing in the timeline that spans the child's
+/// actual run. Live already renders it (codex-acp forwards the wait as a
+/// `collabAgentToolCall`, unlike the spawn), and the reload must agree — a
+/// contentless capsule live and nothing at all on reload is the disagreement
+/// this exists to remove. Both sides come out as a bare pill: no agents, no
+/// prompt, so `AgentCapsule` renders no body.
+///
+/// The legacy shape is NOT routed here — it carries per-agent results, and a
+/// content-free one there means "timed out with nothing to report", which is
+/// noise the caller still drops. `timed_out` (a real bool) is the shape gate:
+/// only the native-team output has it, and a timeout is a real outcome, so it
+/// flags the capsule as failed.
+fn native_team_wait_input(output: &serde_json::Value) -> Option<(String, bool)> {
+    let timed_out = output.get("timed_out")?.as_bool()?;
+    let input = serde_json::json!({
+        "senderThreadId": "",
+        "receiverThreadIds": [],
+        "agentsStates": {},
+        "status": if timed_out { "failed" } else { "completed" },
+        COLLAB_OP_KEY: "wait",
+    });
+    Some((input.to_string(), timed_out))
+}
+
 fn build_collab_wait_input(status: &serde_json::Map<String, serde_json::Value>) -> (String, bool) {
     let mut receiver_ids: Vec<serde_json::Value> = Vec::new();
     let mut agents_states = serde_json::Map::new();
@@ -1557,6 +1723,29 @@ fn build_collab_wait_input(status: &serde_json::Map<String, serde_json::Value>) 
         COLLAB_OP_KEY: "wait",
     });
     (input.to_string(), any_error)
+}
+
+/// Whether a transcript's opening record declares it a forked thread
+/// (`session_meta.parent_thread_id`) — codex 0.147's sub-agent shape, where the
+/// child is a rollout of its own and `fork_turns` copies the parent's history
+/// into its head.
+///
+/// That copy is the problem: the parent's own tool calls sit at the top of the
+/// child's file, indistinguishable at the record level from the child's, so
+/// counting the whole file would credit the child with work the PARENT did. The
+/// hand-off that separates them (the addressed inter-agent `agent_message`) is
+/// not a reliable boundary either — a parent that already collected an earlier
+/// sibling's reply carries one inside the forked prefix too.
+///
+/// So a forked thread yields no stats at all rather than wrong ones. The capsule
+/// still names the sub-agent and badges its thread id (both come from the
+/// PARENT's rollout); only the nested tool-call list is absent. The legacy
+/// `agent-<id>.jsonl` shape has no such prefix and is unaffected.
+fn is_forked_thread_header(value: &serde_json::Value) -> bool {
+    value.get("type").and_then(|t| t.as_str()) == Some("session_meta")
+        && value
+            .pointer("/payload/parent_thread_id")
+            .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
 }
 
 fn parse_codex_subagent_stats(
@@ -1608,6 +1797,7 @@ fn parse_codex_subagent_stats(
     let mut pending_calls: HashMap<String, Vec<AgentToolCall>> = HashMap::new();
     let mut first_ts: Option<DateTime<Utc>> = None;
     let mut last_ts: Option<DateTime<Utc>> = None;
+    let mut checked_header = false;
 
     for line in reader.lines().map_while(Result::ok) {
         if line.trim().is_empty() {
@@ -1617,6 +1807,16 @@ fn parse_codex_subagent_stats(
             Ok(v) => v,
             Err(_) => continue,
         };
+
+        // The header decides whether this file can be counted at all — see
+        // `is_forked_thread_header`. Checked on the first record that parses,
+        // and never again.
+        if !checked_header {
+            checked_header = true;
+            if is_forked_thread_header(&value) {
+                return None;
+            }
+        }
 
         if let Some(ts) = parse_codex_timestamp(&value) {
             if first_ts.is_none() {
@@ -1787,6 +1987,9 @@ fn parse_codex_subagent_stats(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        // Codex's sub-agent rollout is folded into these stats; there is no
+        // separate session for the card to open.
+        child_session_id: None,
     })
 }
 
@@ -1825,11 +2028,38 @@ impl CodexParser {
         // persisted the `/goal` text as the opening `user_message`, which arrives
         // BEFORE the goal — there the flag stays false and nothing is synthesized.
         let mut goal_opens_session = false;
-        let mut last_turn_context_ts: Option<DateTime<Utc>> = None;
+        // Start-of-turn markers, chronological, fed to
+        // `backfill_turn_durations` so the first reply of a turn is measured
+        // from when codex began working — not from the previous turn's end,
+        // which would charge it the user's thinking time.
+        //
+        // Two lists because the two events are not equally trustworthy.
+        // `task_started` fires exactly once per turn. `turn_context` normally
+        // follows it within milliseconds, but newer codex re-emits it MID-turn
+        // (it carries a `turn_id` and is rewritten when the turn's config
+        // changes) — 6 of 495 records across the local rollout corpus. Since a
+        // marker only ever moves the boundary forward, a mid-turn one would
+        // truncate the reply that follows it and silently drop that slice from
+        // the turn's total. So `turn_context` is used only as a fallback, for
+        // rollouts old enough to predate `task_started`.
+        let mut task_start_markers: Vec<DateTime<Utc>> = Vec::new();
+        let mut turn_context_markers: Vec<DateTime<Utc>> = Vec::new();
         let mut context_window_used_tokens: Option<u64> = None;
         let mut context_window_max_tokens: Option<u64> = None;
         let mut latest_total_usage: Option<TurnUsage> = None;
         let mut latest_total_tokens: Option<u64> = None;
+        // Cumulative `total_token_usage` as of the previous `token_count`, so
+        // each event can be reduced to what its own round-trip added.
+        let mut previous_total_usage: Option<TurnUsage> = None;
+        // Previous `last_token_usage`, used only by the no-total fallback to
+        // recognize a restated event.
+        let mut previous_last_usage: Option<TurnUsage> = None;
+        // Round-trip spend recorded before any assistant message existed to
+        // carry it; flushed onto the first one that appears.
+        let mut pending_round_usage: Option<TurnUsage> = None;
+        // Everything every round-trip reported, kept independently of which
+        // message ended up carrying it — see `reconcile_turn_usage`.
+        let mut recorded_round_usage = TurnUsage::default();
 
         let mut first_timestamp: Option<DateTime<Utc>> = None;
         let mut last_timestamp: Option<DateTime<Utc>> = None;
@@ -1962,7 +2192,9 @@ impl CodexParser {
                             .and_then(|m| m.as_str())
                             .map(|s| s.to_string());
                     }
-                    last_turn_context_ts = parse_codex_timestamp(&value);
+                    if let Some(ts) = parse_codex_timestamp(&value) {
+                        push_turn_start(&mut turn_context_markers, ts);
+                    }
                 }
                 "event_msg" => {
                     if let Some(payload) = value.get("payload") {
@@ -1985,9 +2217,39 @@ impl CodexParser {
                         }
 
                         match payload_type {
-                            "task_started" if context_window_max_tokens.is_none() => {
-                                context_window_max_tokens =
-                                    payload.get("model_context_window").and_then(|v| v.as_u64());
+                            // codex 0.147 stopped returning the sub-agent's id
+                            // from `spawn_agent` (its output is just
+                            // `{"task_name":"/root/pnpm_build"}`). This event is
+                            // now the only place the parent's rollout names the
+                            // child thread, and it correlates back by carrying
+                            // the spawn's own `call_id` as `event_id`.
+                            "sub_agent_activity" => {
+                                let call_id = payload
+                                    .get("event_id")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|id| spawn_agent_call_ids.contains(*id));
+                                let thread_id = payload
+                                    .get("agent_thread_id")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|id| !id.is_empty());
+                                if let (Some(call_id), Some(thread_id)) = (call_id, thread_id) {
+                                    agent_id_to_spawn_call_id
+                                        .entry(thread_id.to_string())
+                                        .or_insert_with(|| call_id.to_string());
+                                }
+                            }
+                            "task_started" => {
+                                if context_window_max_tokens.is_none() {
+                                    context_window_max_tokens = payload
+                                        .get("model_context_window")
+                                        .and_then(|v| v.as_u64());
+                                }
+                                // The one marker codex writes exactly once per
+                                // turn; it precedes `turn_context` and the
+                                // prompt.
+                                if let Some(ts) = parse_codex_timestamp(&value) {
+                                    push_turn_start(&mut task_start_markers, ts);
+                                }
                             }
                             "user_message" => {
                                 active_agent_count = 0;
@@ -2133,6 +2395,7 @@ impl CodexParser {
                                                 tool_use_id: Some(id.clone()),
                                                 tool_name: marker.tool_name.to_string(),
                                                 input_preview: Some(marker.input_json),
+                                                status: None,
                                                 meta: None,
                                             },
                                             ContentBlock::ToolResult {
@@ -2273,40 +2536,103 @@ impl CodexParser {
                                     }
 
                                     if !info.is_null() {
-                                        if let Some(usage) = info
-                                            .get("last_token_usage")
-                                            .and_then(extract_turn_usage_from_codex_usage)
-                                        {
-                                            // Attach to the last assistant message
-                                            if let Some(last_msg) = messages
+                                        // What this round-trip spent. Preferred
+                                        // as the rise in the session's own
+                                        // cumulative counter; `last_token_usage`
+                                        // is the fallback for transcripts that
+                                        // report no total, and there a repeat of
+                                        // the previous event is dropped since it
+                                        // restates one call rather than adding
+                                        // another.
+                                        let round = match info.get("total_token_usage") {
+                                            Some(total_payload) => {
+                                                let total = codex_usage_counters(total_payload);
+                                                let round = codex_round_usage(
+                                                    previous_total_usage.as_ref(),
+                                                    &total,
+                                                );
+                                                previous_total_usage = Some(total);
+                                                round
+                                            }
+                                            None => match info.get("last_token_usage") {
+                                                Some(last_payload) => {
+                                                    let last = codex_usage_counters(last_payload);
+                                                    let repeated = previous_last_usage
+                                                        .as_ref()
+                                                        .is_some_and(|prev| prev == &last);
+                                                    previous_last_usage = Some(last.clone());
+                                                    if repeated {
+                                                        TurnUsage::default()
+                                                    } else {
+                                                        // Carry this round into the
+                                                        // cumulative baseline too.
+                                                        // A transcript that mixes
+                                                        // both shapes would
+                                                        // otherwise count it twice:
+                                                        // once here, and again
+                                                        // inside the next
+                                                        // total-bearing event's
+                                                        // delta, which is measured
+                                                        // from a baseline that
+                                                        // never learned about it.
+                                                        let base = previous_total_usage
+                                                            .clone()
+                                                            .unwrap_or_default();
+                                                        previous_total_usage =
+                                                            Some(codex_usage_add(&base, &last));
+                                                        last
+                                                    }
+                                                }
+                                                None => TurnUsage::default(),
+                                            },
+                                        };
+
+                                        if !codex_usage_is_zero(&round) {
+                                            recorded_round_usage =
+                                                codex_usage_add(&recorded_round_usage, &round);
+                                            // Every round of a turn belongs to
+                                            // the assistant message it worked
+                                            // for, so they accumulate onto it
+                                            // rather than the first one winning
+                                            // and the rest being dropped. A
+                                            // round that ran before any
+                                            // assistant message (the model went
+                                            // straight to a tool call) waits
+                                            // here for one to arrive — 3 % of
+                                            // all recorded spend, previously
+                                            // discarded outright.
+                                            pending_round_usage = Some(match pending_round_usage {
+                                                Some(ref pending) => {
+                                                    codex_usage_add(pending, &round)
+                                                }
+                                                None => round,
+                                            });
+                                        }
+                                        if let (Some(pending), Some(last_msg)) = (
+                                            pending_round_usage.clone(),
+                                            messages
                                                 .iter_mut()
                                                 .rev()
-                                                .find(|m| matches!(m.role, MessageRole::Assistant))
-                                            {
-                                                if last_msg.usage.is_none() {
-                                                    last_msg.usage = Some(usage);
+                                                .find(|m| matches!(m.role, MessageRole::Assistant)),
+                                        ) {
+                                            last_msg.usage = Some(match last_msg.usage {
+                                                Some(ref existing) => {
+                                                    codex_usage_add(existing, &pending)
                                                 }
-                                            }
+                                                None => pending,
+                                            });
+                                            pending_round_usage = None;
                                         }
                                     }
                                 }
-                                // Compute duration from turn_context to token_count
-                                if let (Some(start_ts), Some(end_ts)) =
-                                    (last_turn_context_ts, parse_codex_timestamp(&value))
-                                {
-                                    let duration = (end_ts - start_ts).num_milliseconds();
-                                    if duration > 0 {
-                                        if let Some(last_msg) = messages
-                                            .iter_mut()
-                                            .rev()
-                                            .find(|m| matches!(m.role, MessageRole::Assistant))
-                                        {
-                                            if last_msg.duration_ms.is_none() {
-                                                last_msg.duration_ms = Some(duration as u64);
-                                            }
-                                        }
-                                    }
-                                }
+                                // Durations are NOT derived here. `token_count`
+                                // fires once per model request, so measuring
+                                // turn_context → token_count restated the whole
+                                // elapsed turn on every sub-turn; the UI sums
+                                // sub-turns into one card, which multiplied a
+                                // reply's reported time several-fold. See
+                                // `backfill_turn_durations`, applied after
+                                // grouping, which partitions the turn instead.
                             }
                             _ => {}
                         }
@@ -2416,15 +2742,28 @@ impl CodexParser {
                                     }
                                     "spawn_agent" => {
                                         let args = parse_codex_json_arg(payload);
+                                        // codex 0.147's team-of-agents renamed the
+                                        // label: the old `agent_type` became
+                                        // `task_name` (`pnpm_build`). Reading only
+                                        // the old key left every capsule titled
+                                        // "agent".
                                         let agent_type = args
                                             .as_ref()
-                                            .and_then(|a| a.get("agent_type"))
+                                            .and_then(|a| {
+                                                a.get("agent_type").or_else(|| a.get("task_name"))
+                                            })
                                             .and_then(|v| v.as_str())
+                                            .filter(|s| !s.trim().is_empty())
                                             .unwrap_or("agent");
+                                        // Same release made the hand-off message an
+                                        // encrypted envelope; rendering it verbatim
+                                        // filled the capsule's title and prompt with
+                                        // a wall of base64 (see `is_encrypted_envelope`).
                                         let message = args
                                             .as_ref()
                                             .and_then(|a| a.get("message"))
                                             .and_then(|v| v.as_str())
+                                            .filter(|m| !is_encrypted_envelope(m))
                                             .unwrap_or("");
                                         let description =
                                             truncate_str(message.lines().next().unwrap_or(""), 60);
@@ -2434,11 +2773,26 @@ impl CodexParser {
                                         }
                                         active_agent_count += 1;
 
-                                        let agent_input = serde_json::json!({
+                                        let mut agent_input = serde_json::json!({
                                             "subagent_type": agent_type,
                                             "prompt": message,
                                             "description": description,
                                         });
+                                        // The 0.147 shape (`task_name`, no
+                                        // `agent_type`) is the one where this
+                                        // capsule is ONLY a launch: there is no
+                                        // wait/close capsule to carry the result,
+                                        // so the card must not read as "the
+                                        // sub-agent finished". Legacy spawns keep
+                                        // their old meaning and no marker.
+                                        if is_native_team_spawn(args.as_ref()) {
+                                            if let Some(obj) = agent_input.as_object_mut() {
+                                                obj.insert(
+                                                    CODEX_SUBAGENT_LAUNCH_KEY.to_string(),
+                                                    serde_json::Value::Bool(true),
+                                                );
+                                            }
+                                        }
 
                                         messages.push(UnifiedMessage {
                                             id: format!("tool-{}", messages.len()),
@@ -2447,6 +2801,7 @@ impl CodexParser {
                                                 tool_use_id,
                                                 tool_name: "Agent".to_string(),
                                                 input_preview: Some(agent_input.to_string()),
+                                                status: None,
                                                 meta: None,
                                             }],
                                             timestamp,
@@ -2508,6 +2863,7 @@ impl CodexParser {
                                                     script.summary.as_deref(),
                                                     script.call_sites,
                                                 )),
+                                                status: None,
                                                 meta: None,
                                             }],
                                             timestamp,
@@ -2523,6 +2879,17 @@ impl CodexParser {
                                                 .insert(id.clone(), raw_tool_name.to_string());
                                         }
                                         let raw_args = || {
+                                            // `send_message` and friends carry a
+                                            // sealed inter-agent `message`; show a
+                                            // marker instead of half a kilobyte of
+                                            // base64 (see `redact_encrypted_args`).
+                                            // Every other tool takes the original
+                                            // path and renders byte-identically.
+                                            if let Some(mut args) = parse_codex_json_arg(payload) {
+                                                if redact_encrypted_args(&mut args) {
+                                                    return value_to_preview(Some(&args));
+                                                }
+                                            }
                                             value_to_preview(
                                                 payload
                                                     .get("arguments")
@@ -2569,6 +2936,7 @@ impl CodexParser {
                                                 tool_use_id,
                                                 tool_name: raw_tool_name.to_string(),
                                                 input_preview,
+                                                status: None,
                                                 meta: None,
                                             }],
                                             timestamp,
@@ -2714,64 +3082,66 @@ impl CodexParser {
                                     });
                                 } else if is_wait {
                                     // Emit one `collab_agent` capsule per wait,
-                                    // built from THIS wait's own returned agents
-                                    // (`output.status`). Routes through the same
-                                    // CollabAgentCard as the live wait capsule.
-                                    if let Some(output_obj) = parse_codex_json_output(payload) {
-                                        if let Some(status) =
-                                            output_obj.get("status").and_then(|s| s.as_object())
+                                    // routed through the same CollabAgentCard as
+                                    // the live wait capsule. Two output shapes —
+                                    // see `native_team_wait_input`.
+                                    let capsule = parse_codex_json_output(payload).and_then(
+                                        |output_obj| match output_obj
+                                            .get("status")
+                                            .and_then(|s| s.as_object())
                                         {
-                                            // Mark returned agents so the spawn
-                                            // capsule won't also show their result,
-                                            // and record per-agent error state so
-                                            // the execution capsule can render
-                                            // failed (live parity).
-                                            for (agent_id, value) in status {
-                                                agent_waited.insert(agent_id.clone());
-                                                let (st, _) = extract_wait_agent_status(value);
-                                                if is_error_collab_status(&st) {
-                                                    agent_errored.insert(agent_id.clone());
+                                            Some(status) => {
+                                                // Mark returned agents so the spawn
+                                                // capsule won't also show their
+                                                // result, and record per-agent error
+                                                // state so the execution capsule can
+                                                // render failed (live parity).
+                                                for (agent_id, value) in status {
+                                                    agent_waited.insert(agent_id.clone());
+                                                    let (st, _) = extract_wait_agent_status(value);
+                                                    if is_error_collab_status(&st) {
+                                                        agent_errored.insert(agent_id.clone());
+                                                    }
                                                 }
+                                                (!status.is_empty())
+                                                    .then(|| build_collab_wait_input(status))
                                             }
-                                            if !status.is_empty() {
-                                                let (collab_input, is_error) =
-                                                    build_collab_wait_input(status);
-                                                messages.push(UnifiedMessage {
-                                                    id: format!("tool-{}", messages.len()),
-                                                    role: MessageRole::Assistant,
-                                                    content: vec![ContentBlock::ToolUse {
-                                                        tool_use_id: tool_use_id.clone(),
-                                                        tool_name: "collab_agent".to_string(),
-                                                        input_preview: Some(collab_input),
-                                                        meta: None,
-                                                    }],
-                                                    timestamp,
-                                                    usage: None,
-                                                    duration_ms: None,
-                                                    model: None,
-                                                    completed_at: Some(timestamp),
-                                                });
-                                                messages.push(UnifiedMessage {
-                                                    id: format!(
-                                                        "tool-result-{}",
-                                                        messages.len()
-                                                    ),
-                                                    role: MessageRole::Tool,
-                                                    content: vec![ContentBlock::ToolResult {
-                                                        tool_use_id,
-                                                        output_preview: None,
-                                                        is_error,
-                                                        agent_stats: None,
-                                                        images: Vec::new(),
-                                                    }],
-                                                    timestamp,
-                                                    usage: None,
-                                                    duration_ms: None,
-                                                    model: None,
-                                                    completed_at: Some(timestamp),
-                                                });
-                                            }
-                                        }
+                                            None => native_team_wait_input(&output_obj),
+                                        },
+                                    );
+                                    if let Some((collab_input, is_error)) = capsule {
+                                        messages.push(UnifiedMessage {
+                                            id: format!("tool-{}", messages.len()),
+                                            role: MessageRole::Assistant,
+                                            content: vec![ContentBlock::ToolUse {
+                                                tool_use_id: tool_use_id.clone(),
+                                                tool_name: "collab_agent".to_string(),
+                                                input_preview: Some(collab_input),
+                                                status: None,
+                                                meta: None,
+                                            }],
+                                            timestamp,
+                                            usage: None,
+                                            duration_ms: None,
+                                            model: None,
+                                            completed_at: Some(timestamp),
+                                        });
+                                        messages.push(UnifiedMessage {
+                                            id: format!("tool-result-{}", messages.len()),
+                                            role: MessageRole::Tool,
+                                            content: vec![ContentBlock::ToolResult {
+                                                tool_use_id,
+                                                output_preview: None,
+                                                is_error,
+                                                agent_stats: None,
+                                                images: Vec::new(),
+                                            }],
+                                            timestamp,
+                                            usage: None,
+                                            duration_ms: None,
+                                            model: None,
+                                            completed_at: Some(timestamp),
+                                        });
                                     }
                                 } else if is_close {
                                     active_agent_count = active_agent_count.saturating_sub(1);
@@ -3106,9 +3476,18 @@ impl CodexParser {
 
         fold_shell_session_polls(&mut messages, &poll_origins);
         let mut turns = group_into_turns(messages);
+        reconcile_turn_usage(&mut turns, &recorded_round_usage);
         super::relocate_orphaned_tool_results(&mut turns);
         super::structurize_read_tool_output(&mut turns);
         super::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
+        // After relocation every turn's `completed_at` is final — tile the
+        // timeline into per-reply durations before stats aggregate them.
+        let turn_starts = if task_start_markers.is_empty() {
+            &turn_context_markers
+        } else {
+            &task_start_markers
+        };
+        super::backfill_turn_durations(&mut turns, turn_starts);
         let mut session_stats = super::compute_session_stats(&turns);
         session_stats =
             merge_codex_total_usage_stats(session_stats, latest_total_usage, latest_total_tokens);
@@ -3205,6 +3584,142 @@ fn extract_turn_usage_from_codex_usage(usage: &serde_json::Value) -> Option<Turn
     })
 }
 
+/// A codex usage payload read as raw counters, keeping zeros.
+///
+/// [`extract_turn_usage_from_codex_usage`] answers "is there anything to show",
+/// so it collapses an all-zero payload to `None`. The running-total arithmetic
+/// below needs the opposite: a cumulative counter that legitimately still reads
+/// zero is a real datapoint, not an absent one.
+fn codex_usage_counters(usage: &serde_json::Value) -> TurnUsage {
+    let field = |name: &str| usage.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
+    let cache_read = field("cached_input_tokens");
+    TurnUsage {
+        // Codex reports `input_tokens` *inclusive* of the cached prefix, so the
+        // cached part is split out rather than counted twice.
+        input_tokens: field("input_tokens").saturating_sub(cache_read),
+        output_tokens: field("output_tokens"),
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cache_read,
+    }
+}
+
+fn codex_usage_is_zero(usage: &TurnUsage) -> bool {
+    usage.input_tokens == 0
+        && usage.output_tokens == 0
+        && usage.cache_creation_input_tokens == 0
+        && usage.cache_read_input_tokens == 0
+}
+
+fn codex_usage_add(base: &TurnUsage, extra: &TurnUsage) -> TurnUsage {
+    TurnUsage {
+        input_tokens: base.input_tokens.saturating_add(extra.input_tokens),
+        output_tokens: base.output_tokens.saturating_add(extra.output_tokens),
+        cache_creation_input_tokens: base
+            .cache_creation_input_tokens
+            .saturating_add(extra.cache_creation_input_tokens),
+        cache_read_input_tokens: base
+            .cache_read_input_tokens
+            .saturating_add(extra.cache_read_input_tokens),
+    }
+}
+
+/// What one model round-trip added, as the rise in the session's cumulative
+/// counter.
+///
+/// Codex emits a `token_count` event after **every** model call — including the
+/// tool-calling rounds inside a turn — and each one restates
+/// `total_token_usage` for the whole session. Differencing that counter is what
+/// makes the accounting exact: it cannot double-count a `token_count` that is
+/// emitted twice for the same call (7 380 of 31 846 events in a real session
+/// tree are such repeats), and it cannot lose a round whose event went
+/// unrecorded, because the next event's total absorbs it.
+///
+/// A total that moves *backwards* means the counter restarted (a fresh context
+/// after compaction), so the new value is the round's own spend.
+fn codex_round_usage(previous_total: Option<&TurnUsage>, total: &TurnUsage) -> TurnUsage {
+    let grand = |u: &TurnUsage| {
+        u.input_tokens
+            .saturating_add(u.output_tokens)
+            .saturating_add(u.cache_creation_input_tokens)
+            .saturating_add(u.cache_read_input_tokens)
+    };
+    // No baseline, or the counter restarted below it: the whole figure is this
+    // round's own spend. Differencing per field instead would clamp every field
+    // to zero and silently drop the rest of the session.
+    let Some(previous) = previous_total.filter(|prev| grand(prev) <= grand(total)) else {
+        return total.clone();
+    };
+    TurnUsage {
+        input_tokens: total.input_tokens.saturating_sub(previous.input_tokens),
+        output_tokens: total.output_tokens.saturating_sub(previous.output_tokens),
+        cache_creation_input_tokens: total
+            .cache_creation_input_tokens
+            .saturating_sub(previous.cache_creation_input_tokens),
+        cache_read_input_tokens: total
+            .cache_read_input_tokens
+            .saturating_sub(previous.cache_read_input_tokens),
+    }
+}
+
+/// Make the turns account for every token the transcript reported.
+///
+/// Round-trip usage is attached to the assistant message that was current when
+/// the `token_count` arrived, which is right whenever that message survives —
+/// but presentation is allowed to drop or fold messages (a tool call absorbed
+/// into a capsule, a duplicate agent message collapsed away), and a message
+/// that disappears takes its usage with it. Across a real session tree that
+/// silently lost 7 % of Codex spend, concentrated in exactly the sessions that
+/// worked hardest.
+///
+/// So the recorded rounds are also summed independently, and any shortfall is
+/// put back on the last turn that can hold it. The invariant this establishes
+/// is worth stating plainly: **the per-turn usage of a Codex session always
+/// sums to what its own counter reported**, whatever the renderer did to the
+/// turns in between.
+///
+/// A surplus is left alone. It would mean the turns claim more than the
+/// transcript ever reported, which no path here can produce, and inventing a
+/// correction for an impossible state would only hide the bug that caused it.
+fn reconcile_turn_usage(turns: &mut [MessageTurn], recorded: &TurnUsage) {
+    if codex_usage_is_zero(recorded) {
+        return;
+    }
+    let attributed = turns
+        .iter()
+        .filter_map(|t| t.usage.as_ref())
+        .fold(TurnUsage::default(), |acc, u| codex_usage_add(&acc, u));
+
+    let missing = TurnUsage {
+        input_tokens: recorded.input_tokens.saturating_sub(attributed.input_tokens),
+        output_tokens: recorded
+            .output_tokens
+            .saturating_sub(attributed.output_tokens),
+        cache_creation_input_tokens: recorded
+            .cache_creation_input_tokens
+            .saturating_sub(attributed.cache_creation_input_tokens),
+        cache_read_input_tokens: recorded
+            .cache_read_input_tokens
+            .saturating_sub(attributed.cache_read_input_tokens),
+    };
+    if codex_usage_is_zero(&missing) {
+        return;
+    }
+
+    // Prefer a turn that already reports usage — it is one the transcript
+    // itself tied to a model call, so the recovered tokens land beside spend
+    // that really happened rather than on an unrelated bubble.
+    let target = turns
+        .iter()
+        .rposition(|t| t.usage.is_some())
+        .or_else(|| turns.iter().rposition(|t| matches!(t.role, TurnRole::Assistant)));
+    if let Some(turn) = target.and_then(|i| turns.get_mut(i)) {
+        turn.usage = Some(match turn.usage {
+            Some(ref existing) => codex_usage_add(existing, &missing),
+            None => missing,
+        });
+    }
+}
+
 fn extract_context_window_used_tokens_from_token_count_info(
     info: &serde_json::Value,
 ) -> Option<u64> {
@@ -3284,6 +3799,18 @@ fn parse_codex_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
         .get("timestamp")
         .and_then(|t| t.as_str())
         .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+}
+
+/// Append a start-of-turn marker to one of the two marker lists (see their
+/// declaration for why `task_started` and `turn_context` are kept apart).
+///
+/// An out-of-order arrival (skewed clocks in a rollout) is dropped rather than
+/// inserted: the backfill scans the list once, in order.
+fn push_turn_start(turn_starts: &mut Vec<DateTime<Utc>>, ts: DateTime<Utc>) {
+    match turn_starts.last() {
+        Some(last) if ts <= *last => {}
+        _ => turn_starts.push(ts),
+    }
 }
 
 /// Emit any buffered streaming `agent_reasoning` sections as a single Thinking
@@ -3626,15 +4153,22 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
 
 #[cfg(test)]
 mod tests {
+
     use std::collections::HashMap;
 
     use super::extract_codex_title_candidate;
     use super::extract_context_window_used_tokens_from_token_count_info;
     use super::extract_response_item_user_image_blocks;
     use super::extract_turn_usage_from_codex_usage;
+    use super::is_encrypted_envelope;
     use super::merge_codex_context_window_stats;
+    use super::native_team_wait_input;
     use super::merge_codex_total_usage_stats;
+    use super::parse_codex_subagent_stats;
+    use super::redact_encrypted_args;
     use super::resolve_codex_home_dir_from;
+    use super::CODEX_SUBAGENT_LAUNCH_KEY;
+    use super::COLLAB_OP_KEY;
     use super::should_skip_duplicate_user_message;
     use super::strip_blocked_resource_mentions;
     use super::CodexParser;
@@ -3926,13 +4460,290 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
+    /// Sum the per-turn usage a parse produced — what the usage dashboard
+    /// materializes and what the session panel adds up.
+    fn turn_usage_total(detail: &crate::models::ConversationDetail) -> u64 {
+        detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| {
+                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
+                    + u.cache_read_input_tokens
+            })
+            .sum()
+    }
+
+    fn parse_rollout(label: &str, content: &str, session_id: &str) -> crate::models::ConversationDetail {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-{label}-{nanos}.jsonl"));
+        fs::write(&path, content).expect("write test jsonl");
+        let detail = CodexParser::new()
+            .parse_conversation_detail(&path, session_id)
+            .expect("parse detail ok");
+        let _ = fs::remove_file(path);
+        detail
+    }
+
+    #[test]
+    fn every_model_round_trip_of_a_turn_is_counted() {
+        // Codex emits a `token_count` after each model call, so one turn that
+        // calls tools four times reports four times. Only the first was kept
+        // (`if last_msg.usage.is_none()`), which lost most of a working turn's
+        // spend — measured at 61 % of all Codex tokens in a real session tree.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"rounds-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"working\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":20224,\"cached_input_tokens\":0,\"output_tokens\":458},\"last_token_usage\":{\"input_tokens\":20224,\"cached_input_tokens\":0,\"output_tokens\":458}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:13Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":51186,\"cached_input_tokens\":18000,\"output_tokens\":886},\"last_token_usage\":{\"input_tokens\":30962,\"cached_input_tokens\":18000,\"output_tokens\":428}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:29Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":92652,\"cached_input_tokens\":45000,\"output_tokens\":1420},\"last_token_usage\":{\"input_tokens\":41466,\"cached_input_tokens\":27000,\"output_tokens\":534}}}}\n"
+        );
+        let detail = parse_rollout("rounds", content, "rounds-1");
+
+        // The session's own cumulative counter is the ground truth, and the
+        // per-turn rows now reconstruct it exactly.
+        assert_eq!(turn_usage_total(&detail), 92_652 + 1_420);
+        let stats = detail.session_stats.expect("session stats");
+        let total = stats.total_usage.expect("total usage");
+        assert_eq!(
+            total.input_tokens + total.output_tokens + total.cache_read_input_tokens,
+            92_652 + 1_420
+        );
+    }
+
+    #[test]
+    fn a_restated_token_count_is_not_counted_twice() {
+        // Codex sometimes reports the same call twice (7 380 of 31 846 events
+        // in a real tree). Differencing the cumulative counter makes the repeat
+        // contribute nothing, where summing `last_token_usage` would inflate it.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"repeat-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hi\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":0,\"output_tokens\":50},\"last_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":0,\"output_tokens\":50}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":0,\"output_tokens\":50},\"last_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":0,\"output_tokens\":50}}}}\n"
+        );
+        let detail = parse_rollout("repeat", content, "repeat-1");
+        assert_eq!(turn_usage_total(&detail), 1_050);
+    }
+
+    #[test]
+    fn a_round_that_ran_before_any_assistant_message_is_not_lost() {
+        // When the model opens a turn by calling a tool, its first round-trips
+        // finish before it ever speaks. Those had no assistant message to
+        // attach to and were dropped outright — 3 % of all recorded spend.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"early-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"go\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":800,\"cached_input_tokens\":0,\"output_tokens\":40},\"last_token_usage\":{\"input_tokens\":800,\"cached_input_tokens\":0,\"output_tokens\":40}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"done\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1900,\"cached_input_tokens\":0,\"output_tokens\":110},\"last_token_usage\":{\"input_tokens\":1100,\"cached_input_tokens\":0,\"output_tokens\":70}}}}\n"
+        );
+        let detail = parse_rollout("early", content, "early-1");
+        assert_eq!(turn_usage_total(&detail), 1_900 + 110);
+    }
+
+    #[test]
+    fn a_transcript_without_cumulative_totals_still_counts_each_call_once() {
+        // Fallback path: no `total_token_usage` to difference, so a `token_count`
+        // that merely restates the previous one is recognized by its payload.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"nototal-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hi\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":500,\"cached_input_tokens\":100,\"output_tokens\":25}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":500,\"cached_input_tokens\":100,\"output_tokens\":25}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":700,\"cached_input_tokens\":200,\"output_tokens\":30}}}}\n"
+        );
+        let detail = parse_rollout("nototal", content, "nototal-1");
+        assert_eq!(turn_usage_total(&detail), 525 + 730);
+    }
+
+    #[test]
+    fn a_transcript_that_mixes_both_shapes_counts_each_round_exactly_once() {
+        // A no-total event contributes its own `last_token_usage`, so the
+        // cumulative baseline has to learn about it. Otherwise the next
+        // total-bearing event differences against a stale figure and bills that
+        // round a second time.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"mixed-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hi\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":0},\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":0}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":50,\"cached_input_tokens\":0,\"output_tokens\":0}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":180,\"cached_input_tokens\":0,\"output_tokens\":0},\"last_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":0,\"output_tokens\":0}}}}\n"
+        );
+        let detail = parse_rollout("mixed", content, "mixed-1");
+        // 100 + 50 + (180 - 150) — the session's own counter says 180 total.
+        assert_eq!(turn_usage_total(&detail), 180);
+    }
+
+    #[test]
+    fn a_rollout_with_no_assistant_message_still_reports_its_spend() {
+        // A turn that only ran tools and was interrupted leaves `token_count`
+        // events with no assistant turn to carry them, so `reconcile_turn_usage`
+        // has no target. The tokens are not lost: the session-level total is
+        // populated, and that is the fallback `facts_from_detail` records as a
+        // single fact row (covered by `a_session_level_total_is_recorded_when_
+        // no_turn_reports_usage` in commands::token_usage).
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"toolonly-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"go\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":900,\"cached_input_tokens\":100,\"output_tokens\":40},\"last_token_usage\":{\"input_tokens\":900,\"cached_input_tokens\":100,\"output_tokens\":40}}}}\n"
+        );
+        let detail = parse_rollout("toolonly", content, "toolonly-1");
+        assert!(
+            !detail.turns.iter().any(|t| matches!(t.role, TurnRole::Assistant)),
+            "precondition: this rollout has no assistant turn"
+        );
+        let total = detail
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.total_usage.as_ref())
+            .expect("session-level total must survive as the fallback fact source");
+        assert_eq!(
+            total.input_tokens + total.output_tokens + total.cache_read_input_tokens,
+            940
+        );
+    }
+
+    #[test]
+    fn a_counter_that_restarts_after_compaction_does_not_wrap_to_zero() {
+        // A cumulative counter that moves backwards means a fresh context, so
+        // the new value is that round's own spend rather than a negative delta
+        // silently clamped away.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"compact-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hi\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":90000,\"cached_input_tokens\":0,\"output_tokens\":2000}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":5000,\"cached_input_tokens\":0,\"output_tokens\":100}}}}\n"
+        );
+        let detail = parse_rollout("compact", content, "compact-1");
+        assert_eq!(turn_usage_total(&detail), 92_000 + 5_100);
+    }
+
+    #[test]
+    fn parse_detail_durations_partition_a_multi_message_turn() {
+        // Regression: durations came from `turn_context → token_count`, and
+        // codex fires `token_count` once per model request — so every reply in
+        // a turn restated the elapsed time SINCE THE PROMPT. The UI merges a
+        // turn's replies into one card by summing their durations, so a 30s
+        // turn reported 10+22+30 = 62s (on a real 4-prompt rollout: 26 minutes
+        // of work shown as 109). Each reply must instead carry only its own
+        // slice, and the slices must add up to the turn.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-spans-{nanos}.jsonl"));
+
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"spans-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.200Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"go\"}}\n",
+            // Reply 1 at +10s, then two more model requests inside the SAME turn.
+            "{\"timestamp\":\"2026-03-01T10:00:10.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"one\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:11.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"total_tokens\":12}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:22.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"two\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:23.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"total_tokens\":12}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:30.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"three\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:30.400Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"total_tokens\":12}}}}\n",
+            // A second prompt arrives 10 minutes later; that idle gap belongs
+            // to nobody, so its reply must report 4s and not 10m4s.
+            "{\"timestamp\":\"2026-03-01T10:10:30.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:10:30.100Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:10:30.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"again\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:10:34.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"four\"}}\n"
+        );
+        fs::write(&path, content).expect("write test jsonl");
+
+        let parser = CodexParser::new();
+        let detail = parser
+            .parse_conversation_detail(&path, "spans-1")
+            .expect("parse detail ok");
+
+        let assistant_durations: Vec<Option<u64>> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .map(|t| t.duration_ms)
+            .collect();
+        assert_eq!(
+            assistant_durations,
+            vec![
+                Some(10_000), // prompt → "one"
+                Some(12_000), // "one" → "two"
+                Some(8_000),  // "two" → "three"
+                Some(4_000),  // second prompt → "four"
+            ]
+        );
+
+        // Turn 1's replies sum to its wall clock, and the session total is the
+        // two turns' work — never the idle stretch between them.
+        let turn_one: u64 = assistant_durations[..3].iter().flatten().sum();
+        assert_eq!(turn_one, 30_000);
+        let stats = detail.session_stats.expect("session stats");
+        assert_eq!(stats.total_duration_ms, 34_000);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_mid_turn_turn_context_does_not_truncate_the_reply_after_it() {
+        // Newer codex re-emits `turn_context` in the MIDDLE of a turn — it
+        // carries a `turn_id` and is rewritten when the turn's config changes
+        // (6 of 495 records across the local rollout corpus). A start marker
+        // only ever moves the boundary forward, so treating that one as a turn
+        // start would charge the following reply just the time since it and
+        // silently drop the rest of the span from the turn's total. Only
+        // `task_started` — exactly one per turn — anchors the measurement;
+        // `turn_context` is a fallback for rollouts that predate it.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-midctx-{nanos}.jsonl"));
+
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"midctx-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.200Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:00.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"go\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:10.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"one\"}}\n",
+            // Re-emitted mid-turn, 1s before the next reply. If this counted as
+            // a turn start, "two" would report 1s instead of its real 20s.
+            "{\"timestamp\":\"2026-03-01T10:00:29.300Z\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"t-1\",\"model\":\"gpt-5-codex\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:30.300Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"two\"}}\n"
+        );
+        fs::write(&path, content).expect("write test jsonl");
+
+        let parser = CodexParser::new();
+        let detail = parser
+            .parse_conversation_detail(&path, "midctx-1")
+            .expect("parse detail ok");
+
+        let assistant_durations: Vec<Option<u64>> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .map(|t| t.duration_ms)
+            .collect();
+        assert_eq!(assistant_durations, vec![Some(10_000), Some(20_000)]);
+        // Still tiles: 10s + 20s is the whole prompt→last-reply span.
+        let total: u64 = assistant_durations.iter().flatten().sum();
+        assert_eq!(total, 30_000);
+
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn parse_detail_completion_time_uses_agent_message_timestamp_not_added_turn_span() {
-        // Regression: in Codex `duration_ms` is computed from the
-        // turn_context → token_count span, while `timestamp` on the
-        // assistant `UnifiedMessage` is the agent_message event time
-        // (already near turn end). Adding them double-counts the entire
-        // turn span. completed_at must reflect the agent_message arrival.
+        // Regression: `duration_ms` is a *span* and `timestamp` on the
+        // assistant `UnifiedMessage` is the agent_message event time (already
+        // at the end of that span, not its start), so adding the two
+        // double-counts. completed_at must reflect the agent_message arrival.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
@@ -4947,6 +5758,19 @@ mod tests {
         serde_json::json!({ "timestamp": ts, "type": msg_type, "payload": payload }).to_string()
     }
 
+    /// A directory of its own, for the tests that exercise the sibling-file
+    /// lookup: `parse_codex_subagent_stats` scans the whole session directory,
+    /// so it must not see other tests' rollouts (or the rest of `/tmp`).
+    fn temp_session_dir(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("codeg-codex-{tag}-{nanos}"));
+        fs::create_dir_all(&dir).expect("create temp session dir");
+        dir
+    }
+
     fn thinking_texts(detail: &crate::models::ConversationDetail) -> Vec<String> {
         detail
             .turns
@@ -5658,6 +6482,394 @@ mod tests {
         );
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_team_spawn_names_the_task_and_hides_the_encrypted_message() {
+        // codex 0.147's team-of-agents: `agent_type` became `task_name`, the
+        // hand-off `message` became an encrypted envelope, and the spawn output
+        // no longer returns an id — the `sub_agent_activity` event carries it,
+        // correlated by the spawn's own call_id.
+        let sealed = format!("gAAAAAB{}", "qgWsi0g7gOInVU3UTzqL".repeat(30));
+        let lines = vec![
+            rollout_line(
+                "2026-08-16T07:47:37Z",
+                "session_meta",
+                serde_json::json!({"id":"parent","cwd":"/tmp/demo"}),
+            ),
+            rollout_line(
+                "2026-08-16T07:47:41Z",
+                "response_item",
+                serde_json::json!({"type":"message","role":"user","content":[{"type":"input_text","text":"跑一下构建"}]}),
+            ),
+            rollout_line(
+                "2026-08-16T07:47:45Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call","call_id":"call_y7sk","name":"spawn_agent",
+                    "namespace":"collaboration",
+                    "arguments": serde_json::json!({
+                        "task_name":"pnpm_build","fork_turns":"all","message": sealed,
+                    }).to_string(),
+                }),
+            ),
+            rollout_line(
+                "2026-08-16T07:47:46Z",
+                "event_msg",
+                serde_json::json!({
+                    "type":"sub_agent_activity","event_id":"call_y7sk",
+                    "agent_thread_id":"01a0098a-7e8a-72d3-b7c0-2df130c84063",
+                    "agent_path":"/root/pnpm_build","kind":"started",
+                }),
+            ),
+            rollout_line(
+                "2026-08-16T07:47:47Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call_output","call_id":"call_y7sk",
+                    "output": serde_json::json!({"task_name":"/root/pnpm_build"}).to_string(),
+                }),
+            ),
+        ];
+
+        let path = write_temp_rollout("nativeteam", &lines);
+        let detail = CodexParser::new()
+            .parse_conversation_detail(&path, "parent")
+            .expect("parse ok");
+        let input = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    tool_name,
+                    input_preview,
+                    ..
+                } if id == "call_y7sk" && tool_name == "Agent" => input_preview.as_deref(),
+                _ => None,
+            })
+            .expect("spawn Agent capsule present");
+        let parsed: serde_json::Value = serde_json::from_str(input).expect("spawn input is JSON");
+        assert_eq!(
+            parsed.get("subagent_type").and_then(|v| v.as_str()),
+            Some("pnpm_build"),
+            "the capsule must be named after the task, not the removed agent_type"
+        );
+        // The envelope is unreadable, so the capsule shows no prompt at all
+        // rather than a wall of base64 in its title and prompt panel.
+        assert_eq!(parsed.get("prompt").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(parsed.get("description").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            parsed.get("agent_id").and_then(|v| v.as_str()),
+            Some("01a0098a-7e8a-72d3-b7c0-2df130c84063"),
+            "the sub_agent_activity event is the only source of the thread id"
+        );
+        // 0.147 emits no wait/close capsule, so this card stands for the LAUNCH
+        // only and must say so rather than read as "the sub-agent finished".
+        assert_eq!(
+            parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_collab_spawn_keeps_its_run_semantics() {
+        // The pre-0.147 shape DOES get a wait/close capsule carrying the
+        // result, so its capsule really does stand for the run — it must not
+        // pick up the launch-only caveat.
+        let lines = vec![
+            rollout_line(
+                "2026-06-27T14:00:00Z",
+                "session_meta",
+                serde_json::json!({"id":"ai","cwd":"/tmp/demo"}),
+            ),
+            rollout_line(
+                "2026-06-27T14:00:02Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call","call_id":"spawn_x","name":"spawn_agent",
+                    "arguments": serde_json::json!({"agent_type":"worker","message":"do it"}).to_string(),
+                }),
+            ),
+        ];
+        let path = write_temp_rollout("legacyspawn", &lines);
+        let detail = CodexParser::new()
+            .parse_conversation_detail(&path, "ai")
+            .expect("parse ok");
+        let input = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_name,
+                    input_preview,
+                    ..
+                } if tool_name == "Agent" => input_preview.as_deref(),
+                _ => None,
+            })
+            .expect("spawn Agent capsule present");
+        let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
+        assert_eq!(parsed.get("subagent_type").and_then(|v| v.as_str()), Some("worker"));
+        assert_eq!(parsed.get("prompt").and_then(|v| v.as_str()), Some("do it"));
+        assert!(parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).is_none());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn send_message_shows_a_marker_instead_of_the_sealed_payload() {
+        // `send_message` has no capsule of its own — it renders on the generic
+        // tool card, whose preview is the whole argument JSON. Its `message` is
+        // the same sealed envelope `spawn_agent` carries.
+        let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(30));
+        let lines = vec![
+            rollout_line(
+                "2026-08-16T07:47:37Z",
+                "session_meta",
+                serde_json::json!({"id":"parent","cwd":"/tmp/demo"}),
+            ),
+            rollout_line(
+                "2026-08-16T07:47:50Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call","call_id":"call_send","name":"send_message",
+                    "namespace":"collaboration",
+                    "arguments": serde_json::json!({
+                        "target":"/root/pnpm_build","message": sealed,
+                    }).to_string(),
+                }),
+            ),
+        ];
+        let path = write_temp_rollout("sendmessage", &lines);
+        let detail = CodexParser::new()
+            .parse_conversation_detail(&path, "parent")
+            .expect("parse ok");
+        let input = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_name,
+                    input_preview,
+                    ..
+                } if tool_name == "send_message" => input_preview.as_deref(),
+                _ => None,
+            })
+            .expect("send_message card present");
+        assert!(
+            !input.contains("gAAAAAB"),
+            "the sealed payload must not reach the card: {input}"
+        );
+        assert!(input.contains("[encrypted]"), "{input}");
+        // The readable arguments survive.
+        assert!(input.contains("/root/pnpm_build"), "{input}");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn redaction_leaves_ordinary_arguments_untouched() {
+        let mut args = serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000});
+        assert!(!redact_encrypted_args(&mut args));
+        assert_eq!(args, serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000}));
+        // Nested and array positions are reached.
+        let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(10));
+        let mut nested = serde_json::json!({"outer":{"list":[sealed.clone(),"keep me"]}});
+        assert!(redact_encrypted_args(&mut nested));
+        assert_eq!(
+            nested,
+            serde_json::json!({"outer":{"list":["[encrypted]","keep me"]}})
+        );
+    }
+
+    #[test]
+    fn redaction_visits_every_sibling_not_just_the_first() {
+        // Guards the reason `redact_encrypted_children` is a loop: the obvious
+        // `Iterator::any` (which clippy's `unnecessary_fold` even suggests)
+        // stops at the first hit, so a second sealed sibling would reach the
+        // card as half a kilobyte of base64.
+        let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(10));
+        let mut args = serde_json::json!({
+            "list": [sealed.clone(), sealed.clone()],
+            "first": sealed.clone(),
+            "second": sealed.clone(),
+        });
+        assert!(redact_encrypted_args(&mut args));
+        assert_eq!(
+            args,
+            serde_json::json!({
+                "list": ["[encrypted]", "[encrypted]"],
+                "first": "[encrypted]",
+                "second": "[encrypted]",
+            })
+        );
+    }
+
+    #[test]
+    fn native_team_wait_renders_the_same_bare_capsule_history_and_live() {
+        // codex-acp forwards `wait_agent` (unlike the spawn), so live shows a
+        // 「fetch the sub-agent's result」 pill. Reload must show it too — it is
+        // the only span in the timeline covering the child's actual run.
+        let lines = vec![
+            rollout_line(
+                "2026-08-16T09:40:59Z",
+                "session_meta",
+                serde_json::json!({"id":"parent","cwd":"/tmp/demo"}),
+            ),
+            rollout_line(
+                "2026-08-16T09:41:00Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call","call_id":"call_wait","name":"wait_agent",
+                    "namespace":"collaboration",
+                    "arguments": serde_json::json!({"timeout_ms":3600000}).to_string(),
+                }),
+            ),
+            rollout_line(
+                "2026-08-16T09:41:20Z",
+                "response_item",
+                serde_json::json!({
+                    "type":"function_call_output","call_id":"call_wait",
+                    "output": serde_json::json!({
+                        "message":"Wait completed.","timed_out":false,
+                    }).to_string(),
+                }),
+            ),
+        ];
+        let path = write_temp_rollout("nativewait", &lines);
+        let detail = CodexParser::new()
+            .parse_conversation_detail(&path, "parent")
+            .expect("parse ok");
+        let input = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_name,
+                    input_preview,
+                    ..
+                } if tool_name == "collab_agent" => input_preview.as_deref(),
+                _ => None,
+            })
+            .expect("wait capsule present");
+        let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
+        assert_eq!(parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()), Some("wait"));
+        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("completed"));
+        // No agents and no prompt — the card renders as a bare pill, exactly
+        // what the live `collabAgentToolCall` produces for this output.
+        assert_eq!(
+            parsed.get("agentsStates"),
+            Some(&serde_json::json!({}))
+        );
+        let errored = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .any(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }));
+        assert!(!errored, "a completed wait is not an error");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_team_wait_shape_gate_and_timeout() {
+        // `timed_out` is the shape gate: only the native-team output has it.
+        assert!(native_team_wait_input(&serde_json::json!({"message":"Wait completed."})).is_none());
+        assert!(native_team_wait_input(&serde_json::json!({})).is_none());
+        // A timeout is a real outcome — flag the capsule failed.
+        let (input, is_error) =
+            native_team_wait_input(&serde_json::json!({"message":"x","timed_out":true}))
+                .expect("native shape");
+        assert!(is_error);
+        let parsed: serde_json::Value = serde_json::from_str(&input).expect("JSON");
+        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("failed"));
+    }
+
+    #[test]
+    fn encrypted_envelope_detection_is_narrow() {
+        let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(10));
+        assert!(is_encrypted_envelope(&sealed));
+        assert!(is_encrypted_envelope(&format!("  {sealed}  ")));
+        // A prompt that merely mentions or embeds base64 still renders: the
+        // prefix must lead, the blob must be long, and it must be one token.
+        assert!(!is_encrypted_envelope(&format!("decode this: {sealed}")));
+        assert!(!is_encrypted_envelope(&format!("{sealed} and report back")));
+        assert!(!is_encrypted_envelope("gAAAAAB"));
+        assert!(!is_encrypted_envelope("run pnpm build"));
+        assert!(!is_encrypted_envelope(""));
+    }
+
+    #[test]
+    fn forked_child_transcript_yields_no_stats() {
+        // A codex 0.147 sub-agent thread opens with its own `session_meta`
+        // (carrying `parent_thread_id`) and then replays the PARENT's history,
+        // tool calls included. Counting those would credit the child with the
+        // parent's work, so the whole file is refused.
+        let child = "01a0098a-7e8a-72d3-b7c0-2df130c84063";
+        let dir = temp_session_dir("forked-child");
+        // The lookup matches a rollout whose stem ends with the thread id,
+        // which is exactly how codex names a sub-agent's file.
+        fs::write(
+            dir.join(format!("rollout-2026-08-16T07-47-46-{child}.jsonl")),
+            [
+                rollout_line(
+                    "2026-08-16T07:47:46Z",
+                    "session_meta",
+                    serde_json::json!({"id":child,"parent_thread_id":"parent","cwd":"/tmp/demo"}),
+                ),
+                rollout_line(
+                    "2026-08-16T07:47:46Z",
+                    "session_meta",
+                    serde_json::json!({"id":"parent","cwd":"/tmp/demo"}),
+                ),
+                rollout_line(
+                    "2026-08-16T07:47:47Z",
+                    "response_item",
+                    serde_json::json!({
+                        "type":"function_call","call_id":"parents_own","name":"exec_command",
+                        "arguments": serde_json::json!({"cmd":"git status"}).to_string(),
+                    }),
+                ),
+            ]
+            .join("\n"),
+        )
+        .expect("write forked child");
+        assert!(
+            parse_codex_subagent_stats(&dir, child).is_none(),
+            "a forked child transcript must contribute no stats"
+        );
+
+        // The legacy shape has no replayed prefix and still resolves.
+        fs::write(
+            dir.join("agent-solo.jsonl"),
+            [
+                rollout_line(
+                    "2026-08-16T07:47:46Z",
+                    "session_meta",
+                    serde_json::json!({"id":"solo","cwd":"/tmp/demo"}),
+                ),
+                rollout_line(
+                    "2026-08-16T07:47:47Z",
+                    "response_item",
+                    serde_json::json!({
+                        "type":"function_call","call_id":"c1","name":"exec_command",
+                        "arguments": serde_json::json!({"cmd":"pnpm build"}).to_string(),
+                    }),
+                ),
+            ]
+            .join("\n"),
+        )
+        .expect("write own thread");
+        let stats = parse_codex_subagent_stats(&dir, "solo").expect("stats for an own thread");
+        assert_eq!(stats.tool_calls.len(), 1);
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     // ── codex code mode ──────────────────────────────────────────────────
@@ -7119,6 +8331,35 @@ mod tests {
         let uses = tool_uses(&detail);
         assert_eq!(uses.len(), 1);
         assert_eq!(uses[0].1, CODEX_SCRIPT_TOOL_NAME);
+    }
+
+    /// Only a line some separator actually predicts can make a candidate
+    /// ambiguous. Two commands printing the same ordinary line is the normal
+    /// case — `index_body_lines` marks it repeated, but nothing looks it up.
+    #[test]
+    fn a_repeated_output_line_still_splits() {
+        let detail = code_mode_detail(
+            &labelled_fanout(&["alpha", "beta", "gamma"]),
+            labelled_blob(8, &[
+                ("alpha", "shared line\none"),
+                ("beta", "shared line\ntwo"),
+                ("gamma", "three"),
+            ]),
+            "code-mode-labelled-repeat",
+        );
+
+        assert_eq!(
+            tool_results(&detail),
+            vec![
+                ("call_1#0".into(), Some("shared line\none".into()), false),
+                ("call_1#1".into(), Some("shared line\ntwo".into()), false),
+                ("call_1#2".into(), Some("three".into()), false),
+            ]
+        );
+        // Every line the banner declared is present, so nothing went missing.
+        let metas = tool_metas(&detail);
+        assert!(metas.iter().all(|m| m.get("truncated").is_none()));
+        assert!(metas.iter().all(|m| m.get("outputMissing").is_none()));
     }
 
     /// One separator divides nothing: it would hand the whole blob to the first

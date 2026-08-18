@@ -43,7 +43,6 @@ import {
   gitListAllBranches,
   gitRollbackFile,
   gitStatus,
-  listFolderLinks,
   moveFileTreeEntry,
   readFilePreview,
   openCommitWindow,
@@ -159,13 +158,6 @@ const GITIGNORE_MUTED_CLASS = "text-muted-foreground/55"
  * row's `dropActive`. Stays null on the web, so it never forces a re-render there.
  */
 const DesktopDropDirContext = createContext<string | null>(null)
-
-/**
- * Top-level directory names that are links into other projects. Supplied via
- * context rather than threaded through `RenderNode`'s prop list, which is
- * recursive and already long.
- */
-const LinkedDirNamesContext = createContext<ReadonlySet<string>>(new Set())
 
 interface FileActionTarget {
   kind: "file" | "dir"
@@ -688,10 +680,10 @@ function RenderNode({
   // Desktop native drags don't emit DOM dragover, so a directory also lights up
   // when it's the drop zone broadcast from the Tauri DRAG_OVER hit-test.
   const desktopDropDir = useContext(DesktopDropDirContext)
-  const linkedDirNames = useContext(LinkedDirNamesContext)
-  // Links are always direct children of the root, so a top-level row's rel path
-  // *is* the link name.
-  const isLinkedDir = depth === 1 && linkedDirNames.has(node.path)
+  // The backend flags every directory that is a symlink on disk, so this badges
+  // links the user made with `ln -s` at any depth — not just the top-level ones
+  // registered through the "link folder" dialog.
+  const isLinkedDir = node.kind === "dir" && node.symlink === true
   const isGitignoreIgnored =
     ancestorGitignoreIgnored || gitignoreIgnoredPaths.has(node.path)
 
@@ -1220,6 +1212,7 @@ export function FileTreeTab() {
     local: [],
     remote: [],
     worktree_branches: [],
+    main_worktree_branch: null,
   })
   const [compareBranchLoading, setCompareBranchLoading] = useState(false)
   const [compareRecentOpen, setCompareRecentOpen] = useState(true)
@@ -1282,30 +1275,12 @@ export function FileTreeTab() {
     lazyLoadingDirPathsRef.current.clear()
   }, [folder?.path])
 
-  // Top-level directories that are symlinks the user linked in. Only used to
-  // badge those rows — the backend already renders them as ordinary
-  // directories, so a failed fetch just loses the badge.
-  const [linkedNames, setLinkedNames] = useState<Set<string>>(new Set())
   const folderId = folder?.id ?? null
-  const refreshLinkedNames = useCallback(async () => {
-    if (folderId === null) {
-      setLinkedNames(new Set())
-      return
-    }
-    try {
-      const links = await listFolderLinks(folderId)
-      setLinkedNames(new Set(links.map((link) => link.name)))
-    } catch {
-      setLinkedNames(new Set())
-    }
-  }, [folderId])
-
-  useEffect(() => {
-    void refreshLinkedNames()
-  }, [refreshLinkedNames])
 
   // Links can be added from the sidebar menu or another window, so converge on
-  // the backend broadcast rather than only on local mutations.
+  // the backend broadcast rather than only on local mutations. The rows' link
+  // badges ride along on the refreshed tree — every directory node carries a
+  // `symlink` flag — so there is nothing else to refetch here.
   useEffect(() => {
     let disposed = false
     let unlisten: (() => void) | undefined
@@ -1314,7 +1289,6 @@ export function FileTreeTab() {
         FOLDER_LINKS_CHANGED_EVENT,
         (payload) => {
           if (payload.folder_id !== folderId) return
-          void refreshLinkedNames()
           void fetchTreeRef.current?.({ silent: true })
         }
       )
@@ -1325,7 +1299,7 @@ export function FileTreeTab() {
       disposed = true
       unlisten?.()
     }
-  }, [folderId, refreshLinkedNames])
+  }, [folderId])
 
   // Derive the tree's focus from the externally-active file: opening a file from
   // another surface (search, a file tab) — or clicking one here, which opens it —
@@ -2266,7 +2240,12 @@ export function FileTreeTab() {
     // Also drop the loaded branch list so a compare dialog reopened under the
     // new folder starts empty (loading) rather than briefly showing — and
     // letting the user act on — the previous folder's branches.
-    setCompareBranchList({ local: [], remote: [], worktree_branches: [] })
+    setCompareBranchList({
+      local: [],
+      remote: [],
+      worktree_branches: [],
+      main_worktree_branch: null,
+    })
     setCompareCurrentBranch(null)
     setCompareBranchLoading(false)
     resetDirectoryGitActionDialog()
@@ -2360,7 +2339,12 @@ export function FileTreeTab() {
 
   const loadCompareBranches = useCallback(async () => {
     if (!folder?.path) {
-      setCompareBranchList({ local: [], remote: [], worktree_branches: [] })
+      setCompareBranchList({
+        local: [],
+        remote: [],
+        worktree_branches: [],
+        main_worktree_branch: null,
+      })
       setCompareCurrentBranch(null)
       return
     }
@@ -2379,7 +2363,12 @@ export function FileTreeTab() {
       if (branchesResult.status === "fulfilled") {
         setCompareBranchList(branchesResult.value)
       } else {
-        setCompareBranchList({ local: [], remote: [], worktree_branches: [] })
+        setCompareBranchList({
+          local: [],
+          remote: [],
+          worktree_branches: [],
+          main_worktree_branch: null,
+        })
         const message =
           branchesResult.reason instanceof Error
             ? branchesResult.reason.message
@@ -2397,7 +2386,12 @@ export function FileTreeTab() {
       // not clobber (nor toggle the loading of) a compare dialog reopened under
       // folder B.
       if (gen !== loadGenRef.current) return
-      setCompareBranchList({ local: [], remote: [], worktree_branches: [] })
+      setCompareBranchList({
+        local: [],
+        remote: [],
+        worktree_branches: [],
+        main_worktree_branch: null,
+      })
       setCompareCurrentBranch(null)
       const message = toErrorMessage(error)
       toast.error(t("toasts.loadBranchesFailed"), { description: message })
@@ -2882,61 +2876,59 @@ export function FileTreeTab() {
               {folder?.path && (
                 <ContextMenu>
                   <ContextMenuTrigger>
-                    <LinkedDirNamesContext.Provider value={linkedNames}>
-                      <DesktopDropDirContext.Provider value={desktopDropDir}>
-                        <RootDropFolder name={rootNodeName} dnd={treeDndValue}>
-                          {nodes.map((node) => (
-                            <RenderNode
-                              key={node.path}
-                              node={node}
-                              depth={1}
-                              expandedPaths={expandedPaths}
-                              workspacePath={folder.path}
-                              activeSessionTabId={activeSessionTabId}
-                              dnd={treeDndValue}
-                              gitEnabled={gitEnabled}
-                              webMode={webMode}
-                              folderUploadSupported={folderUploadSupported}
-                              gitStatusByPath={gitStatusByPath}
-                              gitChangedDirPaths={gitChangedDirPaths}
-                              untrackedDirPaths={untrackedDirPaths}
-                              gitignoreIgnoredPaths={gitignoreIgnoredPaths}
-                              ancestorGitignoreIgnored={false}
-                              ancestorUntracked={false}
-                              onOpenFilePreview={(path) => {
-                                void openFilePreview(path)
-                              }}
-                              onOpenFileDiff={(path) => {
-                                void openWorkingTreeDiff(path)
-                              }}
-                              onOpenDirDiff={(path) => {
-                                void openWorkingTreeDiff(path, {
-                                  mode: "overview",
-                                })
-                              }}
-                              onOpenCommitWindow={handleOpenCommitWindow}
-                              onRequestCompareWithBranch={
-                                handleRequestCompareWithBranch
-                              }
-                              onRequestRollback={handleRequestRollback}
-                              onOpenDirInTerminal={handleOpenDirInTerminal}
-                              onRequestCreate={handleRequestCreate}
-                              onRequestAddToVcs={handleAddToVcs}
-                              onRequestRename={handleRequestRename}
-                              onRequestDelete={handleRequestDelete}
-                              onRequestUpload={handleRequestUpload}
-                              onRequestDownloadFile={(target) =>
-                                void handleRequestDownloadFile(target)
-                              }
-                              onRequestDownloadDir={(target) =>
-                                void handleRequestDownloadDir(target)
-                              }
-                              onRefresh={fetchTree}
-                            />
-                          ))}
-                        </RootDropFolder>
-                      </DesktopDropDirContext.Provider>
-                    </LinkedDirNamesContext.Provider>
+                    <DesktopDropDirContext.Provider value={desktopDropDir}>
+                      <RootDropFolder name={rootNodeName} dnd={treeDndValue}>
+                        {nodes.map((node) => (
+                          <RenderNode
+                            key={node.path}
+                            node={node}
+                            depth={1}
+                            expandedPaths={expandedPaths}
+                            workspacePath={folder.path}
+                            activeSessionTabId={activeSessionTabId}
+                            dnd={treeDndValue}
+                            gitEnabled={gitEnabled}
+                            webMode={webMode}
+                            folderUploadSupported={folderUploadSupported}
+                            gitStatusByPath={gitStatusByPath}
+                            gitChangedDirPaths={gitChangedDirPaths}
+                            untrackedDirPaths={untrackedDirPaths}
+                            gitignoreIgnoredPaths={gitignoreIgnoredPaths}
+                            ancestorGitignoreIgnored={false}
+                            ancestorUntracked={false}
+                            onOpenFilePreview={(path) => {
+                              void openFilePreview(path)
+                            }}
+                            onOpenFileDiff={(path) => {
+                              void openWorkingTreeDiff(path)
+                            }}
+                            onOpenDirDiff={(path) => {
+                              void openWorkingTreeDiff(path, {
+                                mode: "overview",
+                              })
+                            }}
+                            onOpenCommitWindow={handleOpenCommitWindow}
+                            onRequestCompareWithBranch={
+                              handleRequestCompareWithBranch
+                            }
+                            onRequestRollback={handleRequestRollback}
+                            onOpenDirInTerminal={handleOpenDirInTerminal}
+                            onRequestCreate={handleRequestCreate}
+                            onRequestAddToVcs={handleAddToVcs}
+                            onRequestRename={handleRequestRename}
+                            onRequestDelete={handleRequestDelete}
+                            onRequestUpload={handleRequestUpload}
+                            onRequestDownloadFile={(target) =>
+                              void handleRequestDownloadFile(target)
+                            }
+                            onRequestDownloadDir={(target) =>
+                              void handleRequestDownloadDir(target)
+                            }
+                            onRefresh={fetchTree}
+                          />
+                        ))}
+                      </RootDropFolder>
+                    </DesktopDropDirContext.Provider>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuSub>

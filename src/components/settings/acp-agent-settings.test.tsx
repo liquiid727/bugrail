@@ -12,11 +12,16 @@ import {
   buildVersionCheck,
   configTextForClaudeSave,
   getAgentChecks,
+  hostToolsAgentModeEnabled,
   inferGrokMode,
   materializeClaudeHardeningFlags,
+  patchCodexConfigTomlText,
   patchImportantConfigText,
+  rebaseDeepSeekDraft,
   setClaudeEnvFlagInConfigText,
+  setHostToolsAgentMode,
 } from "./acp-agent-settings"
+import { parse as parseTomlDocument } from "smol-toml"
 import type {
   AcpAgentInfo,
   AdapterInfo,
@@ -39,6 +44,7 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     enabled: true,
     sort_order: 0,
     installed_version: null,
+    host_tools_agent_mode: false,
     env: {},
     config_json: null,
     config_file_path: null,
@@ -1205,5 +1211,396 @@ describe("materializeClaudeHardeningFlags — save-time toggle defaults", () => 
     )
     expect(configText).toBe(invalid)
     expect(envText).toBe("EXISTING=1")
+  })
+})
+
+describe("patchCodexConfigTomlText — codeg's requires_openai_auth default", () => {
+  /** Read `model_providers.codeg.requires_openai_auth` back out of a result. */
+  function authFlagOf(configTomlText: string): boolean | undefined {
+    const parsed = parseTomlDocument(configTomlText) as {
+      model_providers?: Record<string, { requires_openai_auth?: unknown }>
+    }
+    const value = parsed.model_providers?.codeg?.requires_openai_auth
+    return typeof value === "boolean" ? value : undefined
+  }
+
+  // The three structured controls that reach ensureCodexProviderDefaults. Each
+  // must behave identically — the bug in issue #406 fired through all of them.
+  const ENTRY_POINTS: Array<{
+    label: string
+    patch: Parameters<typeof patchCodexConfigTomlText>[1]
+  }> = [
+    { label: "API base URL", patch: { apiBaseUrl: "https://new.example/v1" } },
+    { label: "WebSocket toggle", patch: { supportsWebsockets: true } },
+    { label: "model provider", patch: { modelProvider: "codeg" } },
+  ]
+
+  const BOUND_PROVIDER = [
+    'model_provider = "codeg"',
+    "",
+    "[model_providers.codeg]",
+    'base_url = "https://old.example/v1"',
+    'name = "codeg"',
+    'wire_api = "responses"',
+  ].join("\n")
+
+  for (const { label, patch } of ENTRY_POINTS) {
+    describe(`via the ${label} control`, () => {
+      it("keeps an explicit false", () => {
+        const toml = `${BOUND_PROVIDER}\nrequires_openai_auth = false\n`
+        expect(authFlagOf(patchCodexConfigTomlText(toml, patch))).toBe(false)
+      })
+
+      it("keeps an explicit true", () => {
+        const toml = `${BOUND_PROVIDER}\nrequires_openai_auth = true\n`
+        expect(authFlagOf(patchCodexConfigTomlText(toml, patch))).toBe(true)
+      })
+
+      it("supplies the default when the field is absent", () => {
+        expect(
+          authFlagOf(patchCodexConfigTomlText(BOUND_PROVIDER, patch))
+        ).toBe(true)
+      })
+
+      it("seeds a brand-new provider from an empty config", () => {
+        expect(authFlagOf(patchCodexConfigTomlText("", patch))).toBe(true)
+      })
+
+      it("stands down for a provider using actor authorization", () => {
+        const toml = [
+          BOUND_PROVIDER,
+          "",
+          "[model_providers.codeg.http_headers]",
+          'x-openai-actor-authorization = "local-image-extension"',
+        ].join("\n")
+        expect(
+          authFlagOf(patchCodexConfigTomlText(toml, patch))
+        ).toBeUndefined()
+      })
+    })
+  }
+
+  const ENTRY = ENTRY_POINTS[0].patch
+
+  it("preserves user comments around the managed provider", () => {
+    const toml = [
+      "# my hand-written codex config",
+      'model_provider = "codeg"',
+      "",
+      "[model_providers.codeg]",
+      'base_url = "https://old.example/v1"',
+      "# keep the actor-authorization arrangement intact",
+      "requires_openai_auth = false",
+    ].join("\n")
+    const result = patchCodexConfigTomlText(toml, ENTRY)
+    expect(result).toContain("# my hand-written codex config")
+    expect(result).toContain(
+      "# keep the actor-authorization arrangement intact"
+    )
+    expect(authFlagOf(result)).toBe(false)
+  })
+
+  it("matches the actor-authorization header case-insensitively", () => {
+    const toml = [
+      BOUND_PROVIDER,
+      "",
+      "[model_providers.codeg.http_headers]",
+      'X-OpenAI-Actor-Authorization = "local-image-extension"',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBeUndefined()
+  })
+
+  it("reads the header out of an inline table too", () => {
+    const toml = [
+      'model_provider = "codeg"',
+      "",
+      "[model_providers.codeg]",
+      'base_url = "https://old.example/v1"',
+      'http_headers = { "x-openai-actor-authorization" = "local-image-extension" }',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBeUndefined()
+  })
+
+  // Asserted on the text, not the parse: the text writers predate this change
+  // and cannot patch a provider spelled with root-level dotted keys — they
+  // append a `[model_providers.codeg]` section that redefines the same table.
+  // That limitation is pre-existing and out of scope here; what matters is
+  // that the header is still recognized, so no auth default is added.
+  it("reads the header out of a root-level dotted key too", () => {
+    const toml = [
+      'model_provider = "codeg"',
+      'model_providers.codeg.base_url = "https://old.example/v1"',
+      'model_providers.codeg.http_headers."x-openai-actor-authorization" = "local-image-extension"',
+    ].join("\n")
+    expect(patchCodexConfigTomlText(toml, ENTRY)).not.toContain(
+      "requires_openai_auth"
+    )
+  })
+
+  // Upstream's predicate is `!value.trim().is_empty()`, so a blank header does
+  // NOT enable actor authorization and the default still applies.
+  it("ignores an actor-authorization header with a blank value", () => {
+    const toml = [
+      BOUND_PROVIDER,
+      "",
+      "[model_providers.codeg.http_headers]",
+      'x-openai-actor-authorization = "   "',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBe(true)
+  })
+
+  it("never rewrites an explicit true that sits beside the header", () => {
+    const toml = [
+      BOUND_PROVIDER,
+      "requires_openai_auth = true",
+      "",
+      "[model_providers.codeg.http_headers]",
+      'x-openai-actor-authorization = "local-image-extension"',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBe(true)
+  })
+
+  it("ignores another provider's actor-authorization header", () => {
+    const toml = [
+      BOUND_PROVIDER,
+      "",
+      "[model_providers.other.http_headers]",
+      'x-openai-actor-authorization = "local-image-extension"',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBe(true)
+  })
+
+  // Regression (review round 1): `"http_headers.x-..." = "v"` is ONE literal
+  // key, not an http_headers sub-table. Mistaking it for the nested path would
+  // suppress the default and break codeg's own auth.json-based auth.
+  it("does not mistake a quoted dotted key for the header table", () => {
+    const toml = [
+      BOUND_PROVIDER,
+      '"http_headers.x-openai-actor-authorization" = "local-image-extension"',
+    ].join("\n")
+    expect(authFlagOf(patchCodexConfigTomlText(toml, ENTRY))).toBe(true)
+  })
+
+  // Regression (review round 2): an escaped key still declares the field, so
+  // writing the default would produce a duplicate-key TOML the backend rejects.
+  it("recognizes a field declared through an escaped quoted key", () => {
+    const toml = [BOUND_PROVIDER, '"requires\\u005fopenai_auth" = false'].join(
+      "\n"
+    )
+    const result = patchCodexConfigTomlText(toml, ENTRY)
+    expect(authFlagOf(result)).toBe(false)
+    expect(() => parseTomlDocument(result)).not.toThrow()
+  })
+
+  // A draft can be mid-edit in the raw editor. We cannot tell what is declared,
+  // so we touch nothing — the backend refuses to persist invalid TOML anyway.
+  it("leaves an unparsable draft's auth field alone", () => {
+    const toml = [BOUND_PROVIDER, 'base_url = "unterminated'].join("\n")
+    const result = patchCodexConfigTomlText(toml, ENTRY)
+    expect(result).not.toContain("requires_openai_auth")
+  })
+})
+
+describe("host-tools toggle — hand the fs/terminal channels back to the agent", () => {
+  const KEY = "CODEG_ACP_HOST_TOOLS"
+
+  it("is off for an agent that has never touched the knob", () => {
+    expect(hostToolsAgentModeEnabled("")).toBe(false)
+    expect(hostToolsAgentModeEnabled("XAI_API_KEY=abc")).toBe(false)
+  })
+
+  it("round-trips on and back off", () => {
+    const on = setHostToolsAgentMode("XAI_API_KEY=abc", true)
+    expect(on).toContain(`${KEY}=agent`)
+    expect(hostToolsAgentModeEnabled(on)).toBe(true)
+
+    // Off writes an EXPLICIT `default` rather than deleting the key. Deleting
+    // would let a process-wide `CODEG_ACP_HOST_TOOLS=agent` keep winning, so
+    // the switch could not turn the mode off at all — it would read false
+    // while the next connection still withheld the channels.
+    const off = setHostToolsAgentMode(on, false)
+    expect(off).toContain(`${KEY}=default`)
+    expect(hostToolsAgentModeEnabled(off)).toBe(false)
+    expect(off).toContain("XAI_API_KEY=abc")
+  })
+
+  it("leaves the agent's other env vars alone", () => {
+    const before = "XAI_API_KEY=abc\nGROK_HOME=/tmp/grok"
+    const after = setHostToolsAgentMode(before, true)
+    expect(after).toContain("XAI_API_KEY=abc")
+    expect(after).toContain("GROK_HOME=/tmp/grok")
+  })
+
+  it("reads only the exact sentinel, matching the Rust resolver", () => {
+    // The backend fails OPEN on an unrecognized value (a typo must look like a
+    // typo, not like a silently disabled terminal), so the switch must render
+    // unchecked for anything that is not literally `agent`.
+    expect(hostToolsAgentModeEnabled(`${KEY}=default`)).toBe(false)
+    expect(hostToolsAgentModeEnabled(`${KEY}=Agent`)).toBe(false)
+    expect(hostToolsAgentModeEnabled(`${KEY}=off`)).toBe(false)
+    expect(hostToolsAgentModeEnabled(`${KEY}=`)).toBe(false)
+    // Trimmed, though — `parseEnvText` trims, and so does the backend.
+    expect(hostToolsAgentModeEnabled(`${KEY} = agent `)).toBe(true)
+  })
+
+  it("does not double up when toggled on twice", () => {
+    const once = setHostToolsAgentMode("", true)
+    const twice = setHostToolsAgentMode(once, true)
+    expect(twice).toBe(once)
+    expect(twice.match(new RegExp(KEY, "g"))).toHaveLength(1)
+  })
+
+  it("overrides an inherited value in both directions", () => {
+    // The backend resolves env_json first, then codeg's process env. Whatever
+    // the operator exported, one flip of the switch must decide the outcome —
+    // so both states write an explicit value and neither leaves the key absent.
+    const off = setHostToolsAgentMode("", false)
+    expect(off).toBe(`${KEY}=default`)
+    expect(hostToolsAgentModeEnabled(off)).toBe(false)
+    expect(hostToolsAgentModeEnabled(setHostToolsAgentMode(off, true))).toBe(
+      true
+    )
+  })
+})
+
+describe("rebaseDeepSeekDraft", () => {
+  // Only the fields this helper reads or writes; the rest of AgentDraft is
+  // spread through untouched, which the identity assertion below pins.
+  const draftOf = (envText: string) =>
+    ({
+      envText,
+      apiBaseUrl: "",
+      apiKey: "",
+      model: "",
+      enabled: true,
+      configText: "",
+    }) as unknown as Parameters<typeof rebaseDeepSeekDraft>[0]
+
+  it("folds the panel's keys in while leaving every other key alone", () => {
+    // The window's draft still holds the key it saw before another window
+    // saved a new one; the enable switch would persist this text wholesale.
+    //
+    // `DEEPSEEK_ACP_MODEL` is NOT a panel key — the panel shows no model field
+    // and never writes one, so the raw editor's line stays exactly as typed
+    // even when the persisted env disagrees with it.
+    const draft = draftOf(
+      "DEEPSEEK_API_KEY=sk-old\nDEEPSEEK_ACP_MODEL=deepseek-v4-flash\nSOMETHING_ELSE=keep-me"
+    )
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: {
+        DEEPSEEK_API_KEY: "sk-new",
+        DEEPSEEK_ACP_MODEL: "deepseek-v4-pro",
+      },
+    })
+
+    const next = rebaseDeepSeekDraft(draft, agent)
+    const lines = next.envText.split("\n").sort()
+    expect(lines).toEqual([
+      "DEEPSEEK_ACP_MODEL=deepseek-v4-flash",
+      "DEEPSEEK_API_KEY=sk-new",
+      "SOMETHING_ELSE=keep-me",
+    ])
+    // The structured mirrors are recomputed from the patched text.
+    expect(next.apiKey).toBe("sk-new")
+    expect(next.model).toBe("deepseek-v4-flash")
+  })
+
+  it("does not rebase for a model-only change", () => {
+    // The model is not a panel key, so a model that moved elsewhere is not a
+    // reason to rewrite the draft (and risk a half-typed line in it).
+    const draft = draftOf("DEEPSEEK_ACP_MODEL=deepseek-v4-flash\nKEEP=1")
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_ACP_MODEL: "deepseek-v4-pro" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent)).toBe(draft)
+  })
+
+  it("deletes a panel key the persisted env no longer has", () => {
+    const draft = draftOf("DEEPSEEK_BASE_URL=https://old.example.com\nKEEP=1")
+    const agent = makeAgent({ agent_type: "deepseek" as AgentType, env: {} })
+    expect(rebaseDeepSeekDraft(draft, agent).envText).toBe("KEEP=1")
+  })
+
+  it("returns the SAME object when nothing moved", () => {
+    // A no-op refresh must not invalidate the draft identity.
+    const draft = draftOf("DEEPSEEK_API_KEY=sk-1\nOTHER=2")
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_API_KEY: "sk-1", OTHER: "ignored" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent)).toBe(draft)
+  })
+
+  it("keeps comments and half-typed lines when a key DID move", () => {
+    // The patch is textual: only the lines it owns are rewritten. A parse-and-
+    // reserialize would drop all three of these, and this rebase runs on the
+    // refresh that follows the panel's own save — i.e. while the user may well
+    // be typing in the raw editor next to it.
+    const draft = draftOf(
+      "# proxy for the office network\nDEEPSEEK_API_KEY=sk-old\n\nNEW_PROXY\nKEEP=1"
+    )
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_API_KEY: "sk-new" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent).envText).toBe(
+      "# proxy for the office network\nDEEPSEEK_API_KEY=sk-new\n\nNEW_PROXY\nKEEP=1"
+    )
+  })
+
+  it("survives an env var named after an Object.prototype member", () => {
+    // `constructor`, `toString` and friends are legal env var names, and a
+    // plain object answers `in` for all of them — reading one back yields a
+    // function where a string was expected and throws mid-patch, after the
+    // backend has already committed the save this rebase follows.
+    const draft = draftOf(
+      "constructor=keep\ntoString=keep\nDEEPSEEK_API_KEY=old"
+    )
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_API_KEY: "sk-new" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent).envText).toBe(
+      "constructor=keep\ntoString=keep\nDEEPSEEK_API_KEY=sk-new"
+    )
+  })
+
+  it("appends a new key above a trailing blank line", () => {
+    // That blank line is usually the one the user just pressed Enter on.
+    const draft = draftOf("KEEP=1\n")
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_API_KEY: "sk-1" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent).envText).toBe(
+      "KEEP=1\nDEEPSEEK_API_KEY=sk-1\n"
+    )
+  })
+
+  it("treats a present-but-empty key as different from a missing one", () => {
+    // `patchEnvText` deletes a key whose persisted value is empty, so `KEY=`
+    // left in the draft IS a difference. The enable switch persists the draft
+    // wholesale, and an empty DEEPSEEK_BASE_URL is not "use the default" — it
+    // is an empty endpoint, which the adapter turns into an unusable URL.
+    const draft = draftOf("DEEPSEEK_BASE_URL=\nKEEP=1")
+    const agent = makeAgent({ agent_type: "deepseek" as AgentType, env: {} })
+    expect(rebaseDeepSeekDraft(draft, agent).envText).toBe("KEEP=1")
+  })
+
+  it("leaves a draft mid-edit alone when no panel key moved", () => {
+    // The rebase runs on every `refreshAgents`, including the one after an
+    // unrelated save. Folding the keys in reparses and reserializes the whole
+    // text, which drops comments, blank lines and a half-typed key — so the
+    // decision has to be made on the VALUES, before any rewrite.
+    const draft = draftOf(
+      "# proxy for the office network\nDEEPSEEK_API_KEY=sk-1\n\nNEW_PROXY"
+    )
+    const agent = makeAgent({
+      agent_type: "deepseek" as AgentType,
+      env: { DEEPSEEK_API_KEY: "sk-1" },
+    })
+    expect(rebaseDeepSeekDraft(draft, agent)).toBe(draft)
   })
 })

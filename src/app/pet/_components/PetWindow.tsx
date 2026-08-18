@@ -11,6 +11,7 @@ import {
 } from "@/lib/pet/sprite-url"
 import { disposeTauriListener } from "@/lib/tauri-listener"
 import { getTransport, isDesktop } from "@/lib/transport"
+import { formatProductTitle } from "@/lib/product-manifest"
 import {
   PET_FRAME_DURATIONS_MS,
   PET_ONESHOT_LOOPS,
@@ -271,7 +272,7 @@ export function PetWindow({ petId }: PetWindowProps) {
   // Keep the document title clean. macOS hides it via title_bar_style anyway,
   // but server-mode preview shows it.
   useEffect(() => {
-    document.title = pet ? `${pet.displayName} - codeg pet` : "codeg pet"
+    document.title = formatProductTitle(pet ? `${pet.displayName} pet` : "Pet")
   }, [pet])
 
   // Fully transparent body so the OS chrome is invisible. Done in JS to keep

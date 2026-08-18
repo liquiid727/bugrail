@@ -190,6 +190,354 @@ fn is_slash_command_expansion(value: &serde_json::Value, prompt_id: Option<&str>
     }
 }
 
+/// What the record following a buffered slash command says about that command.
+enum PendingCommandVerdict {
+    /// A real turn followed — the command IS that turn's prompt, so render it.
+    Emit,
+    /// The next thing in the transcript is another user-authored record, so the
+    /// command drove no turn of its own (a client-side `/model`, `/compact`).
+    Drop,
+    /// Undecided: this record is part of the same submission (command output,
+    /// an injected instruction, an attachment, a tool result).
+    Wait,
+}
+
+/// Whether `value` is an instruction Claude Code injected for the model under
+/// the SAME submission as a buffered slash command: an `isMeta` record carrying
+/// the command's `promptId` whose content survives tag-stripping.
+///
+/// This is the positive, causal half of [`pending_command_verdict`] — the
+/// command didn't just happen to precede a turn, it *caused* one. `/goal`'s
+/// injection is the motivating case ("A session-scoped Stop hook is now active
+/// with condition: …", an `isMeta` STRING record sharing the command's
+/// `promptId`), and resolving on it means the transcript grows its user turn the
+/// instant the command is submitted rather than when the model finally answers.
+///
+/// The `promptId` must match: without it, the same shape is exactly a cron-fired
+/// prompt (also `isMeta`, also bare string), which belongs to nobody's command.
+/// The stripping requirement excludes the `<local-command-caveat>` the CLI
+/// writes around local commands — same submission, but it instructs nothing.
+fn is_same_submission_injection(value: &serde_json::Value, prompt_id: Option<&str>) -> bool {
+    let (Some(command_prompt_id), Some(record_prompt_id)) = (
+        prompt_id,
+        value.get("promptId").and_then(|p| p.as_str()),
+    ) else {
+        return false;
+    };
+    if command_prompt_id != record_prompt_id || !is_meta_message(value) {
+        return false;
+    }
+    match value.pointer("/message/content") {
+        Some(serde_json::Value::String(s)) => strip_system_tags(s).is_some(),
+        Some(serde_json::Value::Array(_)) => !extract_user_content(value).is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether a user record is an async sub-agent `<task-notification>` — an
+/// out-of-turn initiator in its own right (`background_watch` opens an episode
+/// on it), so whatever the model writes after it answers the notification, not
+/// a slash command that happened to precede it.
+fn is_task_notification_record(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/message/content")
+        .and_then(|c| c.as_str())
+        .is_some_and(|raw| raw.trim_start().starts_with("<task-notification>"))
+}
+
+/// Resolve a buffered slash command against the record that follows it.
+///
+/// A slash command is persisted as its own user record whose content is pure
+/// command tags, so it strips to nothing and would vanish — leaving the turn it
+/// started with no visible prompt. Whether it deserves a bubble depends on what
+/// it did:
+///
+/// * prompt-expanding commands (`/init`, custom commands) inject the expanded
+///   prompt as an `isMeta` ARRAY record — see [`is_slash_command_expansion`];
+/// * `/goal` writes `<local-command-stdout>` and then an `isMeta` STRING hook
+///   instruction that the model answers directly, so the command is the turn's
+///   prompt (dropping it left the reply anchored to nothing: the transcript
+///   showed a reply to no one, and everything that locates the in-flight prompt
+///   by the trailing user turn — the viewer's partial-reply suppression, the
+///   owner's persisted-tail strip — missed it and double-rendered the reply);
+/// * client-only commands (`/model`, `/compact`) are followed by the user's
+///   NEXT prompt with no model turn in between, and stay hidden as before.
+///
+/// So the verdict is decided by evidence rather than by the single adjacent
+/// record. In order of strength: an injection carrying the command's own
+/// `promptId` proves it caused a turn ([`is_same_submission_injection`]); an
+/// interrupt marker proves a request was in flight to interrupt; a real
+/// (non-synthetic) assistant record shows the model answering. It is refuted by
+/// the next thing that owns a turn of ITS own — another user-authored prompt, a
+/// `<task-notification>` whose settlement the following reply answers, or a
+/// foreign injection (a cron prompt, a post-compaction continuation). That last
+/// refutation is what keeps the weakest evidence honest: without it, a command
+/// buffered indefinitely (this accumulator is fed incrementally by the
+/// background watcher and never flushed) would be adopted by whatever unrelated
+/// reply eventually came along. Everything the CLI writes in between keeps the
+/// question open, and a command left unresolved when the feed ends stays hidden:
+/// end-of-file is a sampling boundary, not evidence.
+fn pending_command_verdict(
+    value: &serde_json::Value,
+    prompt_id: Option<&str>,
+) -> PendingCommandVerdict {
+    if is_slash_command_expansion(value, prompt_id)
+        || is_same_submission_injection(value, prompt_id)
+    {
+        return PendingCommandVerdict::Emit;
+    }
+    match value.get("type").and_then(|t| t.as_str()) {
+        // A synthetic placeholder is what Claude Code writes FOR a client
+        // command — evidence of the opposite, but the next prompt settles it.
+        Some("assistant") if !is_synthetic_assistant(value) => PendingCommandVerdict::Emit,
+        Some("user") => {
+            // The marker is only ever written against a request that was
+            // running, so the command did drive one — keep the prompt that
+            // explains the interrupted (possibly output-less) turn.
+            if is_interrupt_marker(value) {
+                return PendingCommandVerdict::Emit;
+            }
+            if is_task_notification_record(value) {
+                return PendingCommandVerdict::Drop;
+            }
+            if is_meta_message(value) {
+                // Not this command's injection (checked above). If it
+                // demonstrably belongs to ANOTHER submission and instructs the
+                // model — a cron-fired prompt, a post-compaction continuation —
+                // it owns the turn that follows, so it RETIRES the buffered
+                // command rather than leaving it to claim that turn's prompt
+                // slot: this accumulator is fed incrementally by the background
+                // watcher and never flushed, so a command left buffered can
+                // otherwise sit there until some unrelated reply adopts it.
+                //
+                // Both ids are required to call it foreign. Without them there
+                // is nothing to attribute by, and the record is as likely to be
+                // this command's own injection as someone else's — so it decides
+                // nothing and the weaker evidence downstream gets its chance
+                // (that is the whole degradation path for a CLI that stops
+                // stamping submission ids). Same for a record that instructs
+                // nothing at all: the `<local-command-caveat>` wrapped around
+                // local commands.
+                let foreign_submission = matches!(
+                    (prompt_id, value.get("promptId").and_then(|p| p.as_str())),
+                    (Some(command), Some(record)) if command != record
+                );
+                return if foreign_submission && !extract_user_content(value).is_empty() {
+                    PendingCommandVerdict::Drop
+                } else {
+                    PendingCommandVerdict::Wait
+                };
+            }
+            // Tool results continue whatever turn is running; command output
+            // and other tag-only records render nothing at all. Everything else
+            // a user record can hold — text, images — is the next prompt, and
+            // this is the same emptiness test the parser itself applies, so the
+            // two can't disagree about what "renders nothing" means.
+            let tool_results_only = value
+                .pointer("/message/content")
+                .and_then(|c| c.as_array())
+                .is_some_and(|blocks| {
+                    !blocks.is_empty()
+                        && blocks.iter().all(|b| {
+                            b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                        })
+                });
+            if tool_results_only || extract_user_content(value).is_empty() {
+                PendingCommandVerdict::Wait
+            } else {
+                PendingCommandVerdict::Drop
+            }
+        }
+        _ => PendingCommandVerdict::Wait,
+    }
+}
+
+/// What one `goal_status` attachment says about the session's goal.
+enum GoalPhase {
+    /// `/goal <objective>` armed the Stop hook — opens a run whose card wraps
+    /// the work the goal drove.
+    Opened,
+    /// The Stop hook blocked again with the goal still open. It changes nothing
+    /// for a run already on screen, but it is the only evidence a feed that
+    /// STARTED mid-goal ever gets that one is running.
+    Restated,
+    /// The goal ended (met, judged impossible, or cleared) — closes the run.
+    Closed,
+}
+
+/// A goal transition waiting to be written into the transcript.
+struct PendingGoal {
+    /// Provider-neutral goal snapshot, ready for
+    /// [`crate::acp::codex_goal::goal_marker`].
+    snapshot: serde_json::Value,
+    timestamp: DateTime<Utc>,
+    /// The attachment record's own uuid. Addressing the synthetic tool call by
+    /// the EVENT rather than by a position in one parse's output keeps the id
+    /// stable no matter which feed produced it: the cold full-file parse and the
+    /// watcher's incremental tail (whose message vector starts at a baseline,
+    /// not at the file head) number their messages differently, so a
+    /// position-derived id would name two different goal events the same thing
+    /// across the two. `None` only for a record the CLI wrote without one, which
+    /// it never does (it stamps every attachment with a fresh uuid) — the
+    /// positional fallback in [`push_goal_marker`] is there to keep the card
+    /// rather than to hold that guarantee.
+    record_uuid: Option<String>,
+}
+
+/// Read a Claude Code `goal_status` attachment as a goal transition, expressed
+/// in the provider-neutral goal-snapshot shape the live path already renders.
+///
+/// `/goal` is a local slash command: the CLI arms a session-scoped Stop hook and
+/// records every transition of that hook as an `attachment` record —
+/// `{type: "goal_status", condition, met, sentinel?, failed?, reason?,
+/// iterations?, durationMs?, tokens?}`. The live ACP path never sees these; it
+/// gets the adapter's `session_info_update._meta.goal` snapshots instead
+/// (claude-agent-acp's goal extension), which is why a `/goal` conversation used
+/// to show its capsule while streaming and nothing at all on reload. Mapping the
+/// attachment onto the same snapshot shape lets both paths share
+/// [`crate::acp::codex_goal::goal_marker`] and render the identical card.
+///
+/// Which phase it is follows Claude Code's own reading of these records
+/// (`findGoalToRestore`, which decides whether a resumed session still has a
+/// goal): a goal is over once an attachment reports `met` or `failed`, and only
+/// the `sentinel` write arms one. The attachments in between are the Stop hook
+/// reporting that it blocked again with the goal still open.
+///
+/// `met` is deliberately not split into "achieved" and "cleared": clearing a goal
+/// writes `met: true` with the `sentinel` flag, and both end the run the same way
+/// the live path's `_meta.goal = null` clear does — as a `complete` card.
+fn goal_status_transition(value: &serde_json::Value) -> Option<(GoalPhase, serde_json::Value)> {
+    let attachment = value.get("attachment")?;
+    if attachment.get("type").and_then(|t| t.as_str()) != Some("goal_status") {
+        return None;
+    }
+    let objective = attachment
+        .get("condition")
+        .and_then(|c| c.as_str())
+        .map(str::trim)
+        .filter(|c| !c.is_empty())?;
+    let flag = |key: &str| {
+        attachment
+            .get(key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    let met = flag("met");
+    let failed = flag("failed");
+
+    // The status vocabulary is the goal extension's own
+    // (`GoalStatus = active | paused | blocked | limited | complete`): a goal the
+    // model judged impossible is reported as `blocked`, which the card already
+    // labels and tones as a failure. "failed" is NOT in that vocabulary — the
+    // card would fall through to printing the raw word untranslated.
+    let mut snapshot = serde_json::json!({
+        "objective": objective,
+        "status": if met {
+            "complete"
+        } else if failed {
+            "blocked"
+        } else {
+            "active"
+        },
+    });
+    let fields = snapshot
+        .as_object_mut()
+        .expect("goal snapshot is built as an object");
+    // Stats ride only on a terminal attachment; the CLI measures elapsed time in
+    // milliseconds where the goal snapshot (and the card) use whole seconds.
+    if let Some(tokens) = attachment.get("tokens").and_then(|t| t.as_u64()) {
+        fields.insert("tokensUsed".to_string(), tokens.into());
+    }
+    if let Some(iterations) = attachment.get("iterations").and_then(|i| i.as_u64()) {
+        fields.insert("iterations".to_string(), iterations.into());
+    }
+    if let Some(duration_ms) = attachment.get("durationMs").and_then(|d| d.as_f64()) {
+        let seconds = (duration_ms / 1000.0).round().max(0.0) as u64;
+        fields.insert("timeUsedSeconds".to_string(), seconds.into());
+    }
+    if let Some(reason) = attachment
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        fields.insert("lastReason".to_string(), reason.into());
+    }
+
+    let phase = if met || failed {
+        GoalPhase::Closed
+    } else if flag("sentinel") {
+        GoalPhase::Opened
+    } else {
+        GoalPhase::Restated
+    };
+    Some((phase, snapshot))
+}
+
+/// Append one goal transition as the canonical synthetic `create_goal` /
+/// `update_goal` pair — the same representation the live path builds out of
+/// `session_info_update._meta.goal`, so both render through one goal-card
+/// pipeline. Returns the objective actually written, i.e. `None` when the
+/// snapshot named no goal.
+///
+/// The two sides are equivalent, not identical: the live snapshot carries fields
+/// the transcript never records (`controlMethod`, `createdAt`) and a goal it
+/// watched end reports no stats, where a transcript keeps the CLI's own
+/// end-of-run tally. The card reads whatever is there, so a finished goal simply
+/// gains its token/elapsed chips on reload.
+fn push_goal_marker(messages: &mut Vec<UnifiedMessage>, goal: &PendingGoal) -> Option<String> {
+    let marker = crate::acp::codex_goal::goal_marker(&goal.snapshot)?;
+    // Event-addressed where the record allows it, occurrence-addressed
+    // otherwise: two runs sharing an objective must never collide (the live
+    // reducer upserts blocks by id), and the same event must not be named
+    // differently by two feeds — see `PendingGoal::record_uuid`.
+    let id = match goal.record_uuid.as_deref() {
+        Some(uuid) => format!("claude-goal-{uuid}"),
+        None => crate::acp::codex_goal::goal_tool_call_id(messages.len() as u64),
+    };
+    messages.push(UnifiedMessage {
+        id: format!("goal-{}", messages.len()),
+        role: MessageRole::Assistant,
+        content: vec![
+            ContentBlock::ToolUse {
+                tool_use_id: Some(id.clone()),
+                tool_name: marker.tool_name.to_string(),
+                input_preview: Some(marker.input_json),
+                status: None,
+                meta: None,
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: Some(id),
+                output_preview: Some(marker.output_json),
+                is_error: false,
+                agent_stats: None,
+                images: Vec::new(),
+            },
+        ],
+        timestamp: goal.timestamp,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: Some(goal.timestamp),
+    });
+    Some(marker.objective)
+}
+
+/// Write out a goal opening that was waiting for the work it drove (see
+/// `ClaudeRecordAccumulator::pending_goal_open`), and remember the run it left
+/// open so a later restatement doesn't start a second one.
+fn release_pending_goal(
+    messages: &mut Vec<UnifiedMessage>,
+    pending_goal_open: &mut Option<PendingGoal>,
+    open_goal: &mut Option<String>,
+) {
+    if let Some(goal) = pending_goal_open.take() {
+        if let Some(objective) = push_goal_marker(messages, &goal) {
+            *open_goal = Some(objective);
+        }
+    }
+}
+
 /// Check if a JSONL entry is a system meta message (isMeta: true).
 /// Rebuild a standard unified diff from `toolUseResult.structuredPatch`.
 ///
@@ -236,6 +584,54 @@ pub(crate) fn is_meta_message(value: &serde_json::Value) -> bool {
         .get("isMeta")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+/// The bookkeeping records Claude Code appends when a turn is interrupted:
+/// a `user` record whose entire content is `[Request interrupted by user]`
+/// (or `… for tool use` when the interrupt caught a running tool call).
+///
+/// They are addressed to the MODEL — they explain why a tool call has no
+/// result — so they are dropped rather than rendered: as chat bubbles they put
+/// words in the user's mouth, and a user record is also a turn boundary, so
+/// they open an empty trailing turn. (A dedicated in-transcript marker was
+/// tried and removed: wherever it landed — inside the interrupted turn, or as
+/// its own row — it read as noise, and the turn's own cancelled status already
+/// carries the fact.)
+///
+/// Byte-exact, never trimmed and never a substring test: a real message that
+/// quotes the phrase (a bug report, a transcript pasted for review) must still
+/// render verbatim. This drops user-authored content, so it errs toward
+/// under-matching — a future CLI that pads the marker would show the raw text
+/// again, which is visible and fixable, where over-matching silently deletes
+/// what someone actually said.
+pub(crate) fn is_interrupt_marker(value: &serde_json::Value) -> bool {
+    const MARKERS: [&str; 2] = [
+        "[Request interrupted by user]",
+        "[Request interrupted by user for tool use]",
+    ];
+    if value.get("type").and_then(|t| t.as_str()) != Some("user") {
+        return false;
+    }
+    let Some(content) = value.pointer("/message/content") else {
+        return false;
+    };
+    let text = match content {
+        serde_json::Value::String(s) => s.as_str(),
+        serde_json::Value::Array(blocks) => {
+            let [block] = blocks.as_slice() else {
+                return false;
+            };
+            if block.get("type").and_then(|t| t.as_str()) != Some("text") {
+                return false;
+            }
+            match block.get("text").and_then(|t| t.as_str()) {
+                Some(t) => t,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    MARKERS.contains(&text)
 }
 
 /// Capture Claude Code's two dedicated title records into their slots.
@@ -487,7 +883,9 @@ impl ClaudeParser {
             }
 
             // Skip system meta messages (e.g. local-command-caveat injections)
-            if is_meta_message(&value) {
+            // and the interrupt bookkeeping records, which are addressed to the
+            // model rather than spoken by the user.
+            if is_meta_message(&value) || is_interrupt_marker(&value) {
                 continue;
             }
 
@@ -709,11 +1107,27 @@ pub(crate) struct ClaudeRecordAccumulator {
     pub(crate) custom_title: Option<String>,
     pub(crate) first_timestamp: Option<DateTime<Utc>>,
     pub(crate) last_timestamp: Option<DateTime<Utc>>,
-    /// A prompt-expanding slash command is buffered (with its promptId) until
-    /// the next entry confirms it expanded into a real prompt — see
-    /// `is_slash_command_expansion`. Client commands (`/model`) never confirm
-    /// and are dropped, so they stay hidden as before.
+    /// A user-typed slash command is buffered (with its promptId) until a later
+    /// record confirms it drove a real turn — see `pending_command_verdict`.
+    /// Client commands (`/model`, `/compact`) are refuted by the next prompt and
+    /// stay hidden as before, including one left unresolved when the feed ends.
     pending_command: Option<(UnifiedMessage, Option<String>)>,
+    /// A `/goal` that armed the Stop hook, held until the work it drove starts.
+    ///
+    /// Claude Code writes the `goal_status` attachment BEFORE the `/goal` command
+    /// record it belongs to, so opening the run in stream order would put the
+    /// card above the prompt that set it — and leave it wrapping nothing, since a
+    /// user turn ends the assistant block the card is grouped into. It is
+    /// released just before the next real assistant record instead: the head of
+    /// the work the card wraps, which is also where the live path's optimistic
+    /// snapshot lands it — or, for a goal that never reached a reply, at the end
+    /// of a completed file (`finalize_background_lifecycle`), where the tail IS
+    /// the right position.
+    pending_goal_open: Option<PendingGoal>,
+    /// Objective of the goal run currently open in `messages`. A feed that
+    /// starts mid-goal has to open a card off a Stop-hook restatement; one that
+    /// already opened it must not open a second.
+    open_goal: Option<String>,
     /// Async background launches seen in this feed: the ack tool_result's
     /// `tool_use_id` → the launched task id (`toolUseResult.agentId`). Joined
     /// with `background_notifications` by `finalize_background_lifecycle`.
@@ -721,6 +1135,10 @@ pub(crate) struct ClaudeRecordAccumulator {
     /// task id → LATEST `<task-notification>` payload (the same id can notify
     /// more than once — a resumed sub-agent re-notifies; last wins).
     background_notifications: std::collections::HashMap<String, BackgroundNotification>,
+    /// `message.id` → index in `messages` of the line currently carrying that
+    /// API call's usage. See [`Self::claim_assistant_usage`] for why only one
+    /// line of a group may carry it.
+    usage_owner_by_message_id: std::collections::HashMap<String, usize>,
 }
 
 impl ClaudeRecordAccumulator {
@@ -737,8 +1155,75 @@ impl ClaudeRecordAccumulator {
             first_timestamp: None,
             last_timestamp: None,
             pending_command: None,
+            pending_goal_open: None,
+            open_goal: None,
             background_acks: std::collections::HashMap::new(),
             background_notifications: std::collections::HashMap::new(),
+            usage_owner_by_message_id: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Decide whether the assistant line about to be pushed keeps its `usage`.
+    ///
+    /// Claude Code writes **one JSONL line per content block**, not one per API
+    /// call: a response that thinks, then answers, then calls two tools becomes
+    /// four `assistant` lines sharing a single `message.id` — and every one of
+    /// them repeats that call's *complete* usage object. Each line becomes its
+    /// own [`UnifiedMessage`], its own turn, and (for the dashboard) its own
+    /// fact row, so summing them multiplies one API call's tokens by its block
+    /// count. Measured over a real transcript tree that is a 2.4× over-count
+    /// (17.1 B counted vs 7.0 B actually spent), and 74 % of all calls are
+    /// affected — a tool-heavy session inflates the most.
+    ///
+    /// So the usage is attributed to exactly one line per `message.id`. Which
+    /// one barely matters (the payloads are byte-identical in all but a handful
+    /// of cases), but the tie-break is not arbitrary: a few groups carry one
+    /// real payload plus all-zero siblings, so the line with the **largest
+    /// billable total** wins and an earlier winner is demoted retroactively.
+    /// Ties keep the earliest line, which makes the choice stable under
+    /// incremental feeding — the live watcher must not move the number from one
+    /// bubble to another as the rest of a response streams in.
+    ///
+    /// A line with no `message.id` cannot be grouped, so it keeps whatever it
+    /// reported.
+    fn claim_assistant_usage(
+        messages: &mut [UnifiedMessage],
+        usage_owner_by_message_id: &mut std::collections::HashMap<String, usize>,
+        message_id: Option<&str>,
+        usage: Option<TurnUsage>,
+    ) -> Option<TurnUsage> {
+        let usage = usage?;
+        let Some(message_id) = message_id.filter(|id| !id.is_empty()) else {
+            return Some(usage);
+        };
+
+        let billable = |u: &TurnUsage| -> u64 {
+            u.input_tokens
+                .saturating_add(u.output_tokens)
+                .saturating_add(u.cache_creation_input_tokens)
+                .saturating_add(u.cache_read_input_tokens)
+        };
+
+        match usage_owner_by_message_id.get(message_id).copied() {
+            Some(owner) => {
+                let held = messages
+                    .get(owner)
+                    .and_then(|m| m.usage.as_ref())
+                    .map_or(0, billable);
+                if billable(&usage) > held {
+                    if let Some(previous) = messages.get_mut(owner) {
+                        previous.usage = None;
+                    }
+                    usage_owner_by_message_id.insert(message_id.to_string(), messages.len());
+                    Some(usage)
+                } else {
+                    None
+                }
+            }
+            None => {
+                usage_owner_by_message_id.insert(message_id.to_string(), messages.len());
+                Some(usage)
+            }
         }
     }
 
@@ -769,8 +1254,11 @@ impl ClaudeRecordAccumulator {
             first_timestamp,
             last_timestamp,
             pending_command,
+            pending_goal_open,
+            open_goal,
             background_acks,
             background_notifications,
+            usage_owner_by_message_id,
         } = self;
 
         let msg_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -779,17 +1267,29 @@ impl ClaudeRecordAccumulator {
             return;
         }
 
-        // Resolve a buffered slash command against this entry: emit it only
-        // if this entry is its expanded prompt, otherwise drop it (a client
-        // command like `/model` that produced no model turn).
-        if let Some((command_msg, prompt_id)) = pending_command.take() {
-            if is_slash_command_expansion(&value, prompt_id.as_deref()) {
-                messages.push(command_msg);
+        // Resolve a buffered slash command against this entry (see
+        // `pending_command_verdict`): emit it once a real turn is confirmed,
+        // drop it when the next user-authored record arrives first, and keep
+        // waiting through everything the CLI writes in between. A second
+        // command arriving while one is buffered needs no verdict of its own —
+        // it overwrites the buffer below, which discards the first exactly as
+        // `Drop` would.
+        let verdict = pending_command
+            .as_ref()
+            .map(|(_, prompt_id)| pending_command_verdict(&value, prompt_id.as_deref()));
+        match verdict {
+            Some(PendingCommandVerdict::Emit) => {
+                if let Some((command_msg, _)) = pending_command.take() {
+                    messages.push(command_msg);
+                }
             }
+            Some(PendingCommandVerdict::Drop) => *pending_command = None,
+            Some(PendingCommandVerdict::Wait) | None => {}
         }
 
-        // Skip system meta messages
-        if is_meta_message(&value) {
+        // Skip system meta messages and interrupt bookkeeping (see the
+        // matching filter on the batch path).
+        if is_meta_message(&value) || is_interrupt_marker(&value) {
             return;
         }
 
@@ -983,7 +1483,7 @@ impl ClaudeRecordAccumulator {
                                     subagent_dir.join(format!("agent-{}.jsonl", agent_id));
                                 if subagent_path.exists() {
                                     stats.tool_calls =
-                                        parse_subagent_tool_calls(&subagent_path);
+                                        parse_subagent_tool_calls(&subagent_path).0;
                                 }
                             }
                         }
@@ -1012,6 +1512,12 @@ impl ClaudeRecordAccumulator {
                 });
             }
             "assistant" => {
+                // A `/goal` armed just before this reply opens its card here, at
+                // the head of the work it drove (see `pending_goal_open`).
+                // Released before the usage claim below, which addresses the
+                // message it is about to push by `messages.len()`.
+                release_pending_goal(messages, pending_goal_open, open_goal);
+
                 let timestamp = parse_timestamp(&value).unwrap_or_else(Utc::now);
                 let uuid = value
                     .get("uuid")
@@ -1030,7 +1536,17 @@ impl ClaudeRecordAccumulator {
                 }
 
                 let content = extract_assistant_content(&value);
-                let usage = extract_usage(&value);
+                // One API call is spread over several lines that each repeat
+                // its full usage; only one of them may keep it.
+                let usage = Self::claim_assistant_usage(
+                    messages,
+                    usage_owner_by_message_id,
+                    value
+                        .get("message")
+                        .and_then(|m| m.get("id"))
+                        .and_then(|id| id.as_str()),
+                    extract_usage(&value),
+                );
 
                 messages.push(UnifiedMessage {
                     id: uuid,
@@ -1042,6 +1558,47 @@ impl ClaudeRecordAccumulator {
                     model: msg_model,
                     completed_at: Some(timestamp),
                 });
+            }
+            "attachment" => {
+                // `/goal` transitions ride on attachment records; everything
+                // else the CLI attaches (agent listings, skill listings, task
+                // reminders) is context for the model, not conversation.
+                if let Some((phase, snapshot)) = goal_status_transition(&value) {
+                    let transition = PendingGoal {
+                        snapshot,
+                        timestamp: parse_timestamp(&value).unwrap_or_else(Utc::now),
+                        record_uuid: value
+                            .get("uuid")
+                            .and_then(|u| u.as_str())
+                            .filter(|u| !u.is_empty())
+                            .map(|u| u.to_string()),
+                    };
+                    match phase {
+                        // A second `/goal` before the first opened its card
+                        // replaces it, which is what the live path shows too: a
+                        // fresh `active` snapshot arriving over an open run
+                        // takes over that run rather than stacking a card.
+                        GoalPhase::Opened => *pending_goal_open = Some(transition),
+                        GoalPhase::Restated => {
+                            // Only the first restatement of a goal this feed
+                            // never saw armed says anything new — otherwise the
+                            // card is already open (or about to be).
+                            if open_goal.is_none() && pending_goal_open.is_none() {
+                                *pending_goal_open = Some(transition);
+                            }
+                        }
+                        GoalPhase::Closed => {
+                            // A goal cleared before it ever reached a reply
+                            // still gets its opening card: releasing the pending
+                            // open here keeps the pair together, so the run
+                            // closes instead of leaving a bare terminal card
+                            // with no run to end.
+                            release_pending_goal(messages, pending_goal_open, open_goal);
+                            push_goal_marker(messages, &transition);
+                            *open_goal = None;
+                        }
+                    }
+                }
             }
             "system" => {
                 let subtype = value.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -1079,6 +1636,7 @@ impl ClaudeRecordAccumulator {
                         tool_use_id: Some(synthetic_id),
                         tool_name,
                         input_preview,
+                        status: None,
                         meta: None,
                     });
                 } else {
@@ -1089,6 +1647,7 @@ impl ClaudeRecordAccumulator {
                             tool_use_id: Some(synthetic_id),
                             tool_name,
                             input_preview,
+                            status: None,
                             meta: None,
                         }],
                         timestamp,
@@ -1271,7 +1830,27 @@ impl ClaudeRecordAccumulator {
 
     /// In-place [`Self::apply_background_lifecycle`] over `self.messages` —
     /// the full-file detail parse calls this once after feeding every record.
+    ///
+    /// A slash command still awaiting its verdict is deliberately NOT flushed
+    /// here: end-of-file is a sampling boundary, not evidence that the command
+    /// drove a turn (the watcher re-reads the same growing file every second,
+    /// and a cold parse can land anywhere). Emitting on it would make a trailing
+    /// `/model` appear and then vanish once the next prompt refuted it. The
+    /// commands that need their bubble mid-turn get it from their own injection
+    /// record instead — see `is_same_submission_injection`.
+    ///
+    /// A goal opening IS flushed here, and the difference is what each one is
+    /// waiting for. The command is waiting on a verdict — end-of-file answers
+    /// nothing. The goal already happened (the CLI wrote the attachment); only
+    /// its POSITION is deferred, and at the end of a complete file the tail is
+    /// that position: nothing follows for the card to wrap, and the card belongs
+    /// under the prompt that set it, which is exactly where the tail is.
     pub(crate) fn finalize_background_lifecycle(&mut self) {
+        release_pending_goal(
+            &mut self.messages,
+            &mut self.pending_goal_open,
+            &mut self.open_goal,
+        );
         let mut messages = std::mem::take(&mut self.messages);
         self.apply_background_lifecycle(&mut messages);
         self.messages = messages;
@@ -1324,9 +1903,19 @@ impl ClaudeParser {
         super::relocate_orphaned_tool_results(&mut turns);
         super::structurize_read_tool_output(&mut turns);
         super::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
+        // Only very old Claude Code builds wrote `system` / `turn_duration`
+        // records; current ones log no timings at all, so without this every
+        // reply lost its elapsed-time chip the moment the live timer stopped.
+        // Runs before the facts are derived, so the usage dashboard's elapsed
+        // time is backfilled too.
+        super::backfill_turn_durations(&mut turns, &[]);
+        // Read the context window *before* folding in delegated spend: the
+        // gauge measures how full this conversation's own prompt is, and a
+        // sub-agent's context is its own, not this one's.
         let context_window_used_tokens = latest_claude_context_window_used_tokens(&turns);
         let context_window_max_tokens =
             claude_context_window_max_tokens_for_model(model.as_deref());
+        attribute_subagent_usage(path, &mut turns);
         let session_stats = merge_claude_context_window_stats(
             super::compute_session_stats(&turns),
             context_window_used_tokens,
@@ -1556,6 +2145,7 @@ fn extract_assistant_content(value: &serde_json::Value) -> Vec<ContentBlock> {
                         tool_use_id,
                         tool_name,
                         input_preview,
+                        status: None,
                         meta: None,
                     });
                 }
@@ -1635,6 +2225,9 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
             .and_then(|v| v.as_u64())
             .map(|v| v as u32),
         tool_calls: Vec::new(),
+        // Claude's sub-agent lives inside the parent transcript (a sidechain),
+        // not as a session of its own.
+        child_session_id: None,
     }
 }
 
@@ -1644,10 +2237,97 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// assistant messages with tool_use blocks, followed by user messages
 /// with tool_result blocks. We pair them by tool_use_id and produce
 /// a compact list of `AgentToolCall` records.
-fn parse_subagent_tool_calls(path: &PathBuf) -> Vec<AgentToolCall> {
+/// Fold what this session's `Task` sub-agents spent into its own messages.
+///
+/// A sub-agent runs its own conversation with the model and writes it to
+/// `<session>/subagents/agent-<id>.jsonl`. Session discovery only globs the
+/// session-level transcripts, so those files are never a conversation anyone
+/// can open — and their tokens were counted nowhere at all: 4.9 % of all Claude
+/// spend in a real transcript tree, concentrated in exactly the sessions that
+/// delegate the most work.
+///
+/// The directory is the unit of truth here, not the `toolUseResult` entries
+/// that reference it, and both halves of that matter. Following references
+/// **over-counts**, because the same `agentId` is reported by more than one
+/// result line (57 repeats in the same tree) and each would add the transcript
+/// again. Following references also **under-counts**, badly: 217 of 295
+/// transcripts have no completed result to reference them at all — a sub-agent
+/// that was interrupted, or was still running when the session ended, spent its
+/// tokens regardless. Reading each file exactly once, referenced or not, is the
+/// only way to get both directions right.
+///
+/// Each transcript's spend lands on the assistant turn that was current when
+/// the sub-agent started, so a session running across midnight attributes its
+/// delegated work to the day it actually happened.
+///
+/// Runs on turns rather than messages, and deliberately after the context
+/// window has been read: delegated tokens are this session's *spend*, but they
+/// never occupied this session's prompt.
+fn attribute_subagent_usage(session_path: &Path, turns: &mut [MessageTurn]) {
+    let subagent_dir = session_path.with_extension("").join("subagents");
+    let Ok(entries) = fs::read_dir(&subagent_dir) else {
+        return;
+    };
+
+    let mut transcripts: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    // Directory order is filesystem-defined; sort so attribution is identical
+    // on every parse of the same session.
+    transcripts.sort();
+
+    for transcript in transcripts {
+        let (_, usage, started_at) = parse_subagent_tool_calls(&transcript);
+        let Some(extra) = usage else { continue };
+
+        // The turn that was speaking when the sub-agent began. Falling back to
+        // the last assistant message keeps the tokens in the session even when
+        // the transcript carries no usable timestamp.
+        let target = started_at
+            .and_then(|start| {
+                turns
+                    .iter()
+                    .rposition(|t| matches!(t.role, TurnRole::Assistant) && t.timestamp <= start)
+            })
+            .or_else(|| {
+                turns
+                    .iter()
+                    .rposition(|t| matches!(t.role, TurnRole::Assistant))
+            });
+        let Some(launcher) = target.and_then(|i| turns.get_mut(i)) else {
+            continue;
+        };
+        launcher.usage = Some(match launcher.usage {
+            Some(ref own) => TurnUsage {
+                input_tokens: own.input_tokens.saturating_add(extra.input_tokens),
+                output_tokens: own.output_tokens.saturating_add(extra.output_tokens),
+                cache_creation_input_tokens: own
+                    .cache_creation_input_tokens
+                    .saturating_add(extra.cache_creation_input_tokens),
+                cache_read_input_tokens: own
+                    .cache_read_input_tokens
+                    .saturating_add(extra.cache_read_input_tokens),
+            },
+            None => extra,
+        });
+    }
+}
+
+/// Read one sub-agent's transcript: the tool calls it made, what it spent, and
+/// when it started.
+///
+/// The usage is deduped by `message.id` on the same rule the parent transcript
+/// uses (see [`ClaudeRecordAccumulator::claim_assistant_usage`]) — a sub-agent
+/// transcript has the identical one-line-per-content-block shape. It is
+/// consumed by [`attribute_subagent_usage`]; the tool-call caller ignores it.
+fn parse_subagent_tool_calls(
+    path: &PathBuf,
+) -> (Vec<AgentToolCall>, Option<TurnUsage>, Option<DateTime<Utc>>) {
     let file = match fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), None, None),
     };
     let reader = BufReader::new(file);
 
@@ -1655,6 +2335,10 @@ fn parse_subagent_tool_calls(path: &PathBuf) -> Vec<AgentToolCall> {
     let mut calls: Vec<(String, String, Option<String>)> = Vec::new(); // (id, name, input)
     let mut results: std::collections::HashMap<String, (Option<String>, bool)> =
         std::collections::HashMap::new();
+    // `message.id` → that API call's usage; one entry per call, largest wins.
+    let mut usage_by_message_id: std::collections::HashMap<String, TurnUsage> =
+        std::collections::HashMap::new();
+    let mut started_at: Option<DateTime<Utc>> = None;
 
     for line in reader.lines() {
         let line = match line {
@@ -1671,7 +2355,33 @@ fn parse_subagent_tool_calls(path: &PathBuf) -> Vec<AgentToolCall> {
 
         let msg_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
+        if started_at.is_none() {
+            started_at = parse_timestamp(&value);
+        }
+
         if msg_type == "assistant" {
+            if let Some(usage) = extract_usage(&value) {
+                let billable = |u: &TurnUsage| {
+                    u.input_tokens
+                        .saturating_add(u.output_tokens)
+                        .saturating_add(u.cache_creation_input_tokens)
+                        .saturating_add(u.cache_read_input_tokens)
+                };
+                // A line with no `message.id` cannot be grouped with anything,
+                // so it gets a key of its own rather than being dropped —
+                // matching how the parent transcript treats the same shape.
+                let key = value
+                    .get("message")
+                    .and_then(|m| m.get("id"))
+                    .and_then(|id| id.as_str())
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("__ungrouped-{}__", usage_by_message_id.len()));
+                let slot = usage_by_message_id.entry(key).or_default();
+                if billable(&usage) > billable(slot) {
+                    *slot = usage;
+                }
+            }
             if let Some(content) = value
                 .get("message")
                 .and_then(|m| m.get("content"))
@@ -1725,7 +2435,21 @@ fn parse_subagent_tool_calls(path: &PathBuf) -> Vec<AgentToolCall> {
         }
     }
 
-    calls
+    let usage = usage_by_message_id
+        .into_values()
+        .reduce(|acc, u| TurnUsage {
+            input_tokens: acc.input_tokens.saturating_add(u.input_tokens),
+            output_tokens: acc.output_tokens.saturating_add(u.output_tokens),
+            cache_creation_input_tokens: acc
+                .cache_creation_input_tokens
+                .saturating_add(u.cache_creation_input_tokens),
+            cache_read_input_tokens: acc
+                .cache_read_input_tokens
+                .saturating_add(u.cache_read_input_tokens),
+        })
+        .filter(|u| u != &TurnUsage::default());
+
+    let calls = calls
         .into_iter()
         .map(|(id, name, input)| {
             let (output, is_error) = results.remove(&id).unwrap_or((None, false));
@@ -1736,7 +2460,8 @@ fn parse_subagent_tool_calls(path: &PathBuf) -> Vec<AgentToolCall> {
                 is_error,
             }
         })
-        .collect()
+        .collect();
+    (calls, usage, started_at)
 }
 
 fn extract_tool_result_text(item: &serde_json::Value) -> Option<String> {
@@ -1888,10 +2613,121 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
 
 #[cfg(test)]
 mod tests {
+
     use std::io::Write;
 
     use super::*;
     use serde_json::json;
+
+    /// Cancelling a turn makes Claude Code append a `user` record reading
+    /// `[Request interrupted by user]`. It is addressed to the MODEL — it
+    /// explains why a tool call has no result — so it is dropped: as a chat
+    /// bubble it puts words in the user's mouth, and a user record is a turn
+    /// boundary, so it also opens an empty trailing turn. Both parse paths
+    /// (batch detail + the watcher's accumulator) must drop it, and neither
+    /// may drop a real message that merely quotes the phrase.
+    #[test]
+    fn interrupt_bookkeeping_records_never_render_as_user_messages() {
+        let marker = json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}
+        });
+        assert!(is_interrupt_marker(&marker));
+
+        let tool_variant = json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "[Request interrupted by user for tool use]"}
+            ]}
+        });
+        assert!(is_interrupt_marker(&tool_variant));
+
+        // String-shaped content matches too.
+        assert!(is_interrupt_marker(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": "[Request interrupted by user]"}
+        })));
+
+        // A real message that QUOTES the marker still renders: the phrase is
+        // embedded, not the record's whole content.
+        assert!(!is_interrupt_marker(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "why does [Request interrupted by user] show up as a bubble?"}
+            ]}
+        })));
+
+        // Padding makes it someone's own message again, in either content
+        // shape — this deletes user content, so it under-matches.
+        assert!(!is_interrupt_marker(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": " [Request interrupted by user] "}
+        })));
+        assert!(!is_interrupt_marker(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "[Request interrupted by user]\n\nwhy?"}
+            ]}
+        })));
+
+        // Assistant text and multi-block user records are never markers.
+        assert!(!is_interrupt_marker(&json!({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "[Request interrupted by user]"}
+            ]}
+        })));
+        assert!(!is_interrupt_marker(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "[Request interrupted by user]"},
+                {"type": "text", "text": "carry on"}
+            ]}
+        })));
+
+        // End to end: a cancelled turn leaves the reply as the last thing on
+        // screen — no trailing bubble, and no extra turn.
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-Users-test-proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let path = proj.join("sess-interrupt.jsonl");
+        let lines = [
+            r#"{"type":"user","timestamp":"2026-07-07T03:40:00.000Z","uuid":"u1","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"text","text":"run the build"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-07-07T03:40:05.000Z","uuid":"a1","message":{"role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"Working on it."}]}}"#,
+            r#"{"type":"user","timestamp":"2026-07-07T03:40:09.000Z","uuid":"u2","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#,
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let parser = ClaudeParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("sess-interrupt").unwrap();
+        assert_eq!(
+            detail.turns.len(),
+            2,
+            "the prompt and the assistant turn — the marker opens no third turn"
+        );
+        let rendered = serde_json::to_string(&detail.turns).unwrap();
+        assert!(
+            !rendered.contains("Request interrupted"),
+            "the interrupt marker must not reach the rendered turns"
+        );
+        // Positive half: everything ELSE survives. Without this an over-broad
+        // filter that dropped the whole conversation would pass too.
+        assert!(rendered.contains("run the build"), "the prompt must remain");
+        assert!(rendered.contains("Working on it."), "the reply must remain");
+
+        let mut acc = ClaudeRecordAccumulator::new(path.clone());
+        for line in lines {
+            acc.feed_line(line);
+        }
+        assert!(
+            !acc.messages
+                .iter()
+                .any(|m| serde_json::to_string(&m.content)
+                    .unwrap_or_default()
+                    .contains("Request interrupted")),
+            "the watcher's accumulator must drop it too"
+        );
+    }
 
     #[test]
     fn accumulator_pipeline_matches_full_detail_parse() {
@@ -1933,6 +2769,7 @@ mod tests {
         crate::parsers::relocate_orphaned_tool_results(&mut turns);
         crate::parsers::structurize_read_tool_output(&mut turns);
         crate::parsers::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
+        crate::parsers::backfill_turn_durations(&mut turns, &[]);
 
         assert_eq!(
             serde_json::to_string(&turns).unwrap(),
@@ -2593,6 +3430,422 @@ mod tests {
         assert_eq!(total, 1900); // 1000 + 200 + 300 + 400
     }
 
+    /// Build the `assistant` line Claude Code writes for one content block of a
+    /// response — `id` identifies the API call, so several lines share it.
+    fn assistant_block_line(
+        uuid: &str,
+        message_id: &str,
+        at: &str,
+        block: serde_json::Value,
+        usage: serde_json::Value,
+    ) -> String {
+        json!({
+            "type": "assistant",
+            "sessionId": "dedup-test",
+            "timestamp": at,
+            "uuid": uuid,
+            "message": {
+                "id": message_id,
+                "model": "claude-opus-5",
+                "content": [block],
+                "usage": usage,
+            }
+        })
+        .to_string()
+    }
+
+    fn parse_lines_into_detail(lines: &[String]) -> crate::models::ConversationDetail {
+        let path = std::env::temp_dir().join(format!(
+            "codeg-claude-usage-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let mut file = fs::File::create(&path).expect("create temp jsonl");
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+        drop(file);
+        let parser = ClaudeParser {
+            base_dir: PathBuf::new(),
+        };
+        let detail = parser
+            .parse_conversation_detail(&path, "dedup-test")
+            .expect("parse detail");
+        fs::remove_file(&path).unwrap();
+        detail
+    }
+
+    fn total_usage_tokens(detail: &crate::models::ConversationDetail) -> u64 {
+        detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| {
+                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
+                    + u.cache_read_input_tokens
+            })
+            .sum()
+    }
+
+    #[test]
+    fn one_api_call_is_counted_once_however_many_lines_it_was_written_as() {
+        // Claude Code writes one line per content block and repeats the call's
+        // complete usage on every one of them. Summing the lines multiplied a
+        // single call's spend by its block count — a 2.4× inflation measured
+        // over a real transcript tree, worst on the tool-heavy sessions.
+        let usage = json!({
+            "input_tokens": 2990,
+            "output_tokens": 288,
+            "cache_creation_input_tokens": 50908,
+            "cache_read_input_tokens": 0
+        });
+        let lines = vec![
+            assistant_block_line(
+                "a1",
+                "msg_one_call",
+                "2026-03-01T10:00:00Z",
+                json!({"type": "thinking", "thinking": "…"}),
+                usage.clone(),
+            ),
+            assistant_block_line(
+                "a2",
+                "msg_one_call",
+                "2026-03-01T10:00:01Z",
+                json!({"type": "text", "text": "answer"}),
+                usage.clone(),
+            ),
+            assistant_block_line(
+                "a3",
+                "msg_one_call",
+                "2026-03-01T10:00:02Z",
+                json!({"type": "tool_use", "id": "tu1", "name": "Read", "input": {}}),
+                usage.clone(),
+            ),
+        ];
+
+        let detail = parse_lines_into_detail(&lines);
+        // Every block still renders — only the usage is attributed once.
+        assert_eq!(detail.turns.len(), 3);
+        assert_eq!(
+            detail.turns.iter().filter(|t| t.usage.is_some()).count(),
+            1,
+            "exactly one turn of the group may carry the call's usage"
+        );
+        assert_eq!(total_usage_tokens(&detail), 54_186);
+        assert_eq!(
+            detail
+                .session_stats
+                .as_ref()
+                .and_then(|s| s.total_tokens)
+                .expect("total tokens"),
+            54_186
+        );
+    }
+
+    #[test]
+    fn a_group_whose_siblings_report_zeros_keeps_the_real_payload() {
+        // A handful of real groups carry one billed payload plus all-zero
+        // siblings, in either order. Whichever line holds the real numbers wins,
+        // so the tie-break can't quietly zero out a paid call.
+        let real = json!({
+            "input_tokens": 2,
+            "output_tokens": 383,
+            "cache_creation_input_tokens": 418,
+            "cache_read_input_tokens": 177_892
+        });
+        let zeros = json!({
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        });
+
+        for (first, second) in [(zeros.clone(), real.clone()), (real.clone(), zeros.clone())] {
+            let detail = parse_lines_into_detail(&[
+                assistant_block_line(
+                    "a1",
+                    "msg_mixed",
+                    "2026-03-01T10:00:00Z",
+                    json!({"type": "text", "text": "one"}),
+                    first,
+                ),
+                assistant_block_line(
+                    "a2",
+                    "msg_mixed",
+                    "2026-03-01T10:00:01Z",
+                    json!({"type": "text", "text": "two"}),
+                    second,
+                ),
+            ]);
+            assert_eq!(total_usage_tokens(&detail), 178_695);
+        }
+    }
+
+    #[test]
+    fn separate_api_calls_still_add_up() {
+        // The dedup is per `message.id`, so two real calls that happen to report
+        // identical usage must both count.
+        let usage = json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        });
+        let detail = parse_lines_into_detail(&[
+            assistant_block_line(
+                "a1",
+                "msg_first",
+                "2026-03-01T10:00:00Z",
+                json!({"type": "text", "text": "one"}),
+                usage.clone(),
+            ),
+            assistant_block_line(
+                "a2",
+                "msg_second",
+                "2026-03-01T10:05:00Z",
+                json!({"type": "text", "text": "two"}),
+                usage.clone(),
+            ),
+        ]);
+        assert_eq!(total_usage_tokens(&detail), 240);
+    }
+
+    #[test]
+    fn an_assistant_line_with_no_message_id_keeps_its_own_usage() {
+        // Nothing to group by, so nothing may be dropped.
+        let usage = json!({
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        });
+        let line = |uuid: &str, at: &str| {
+            json!({
+                "type": "assistant",
+                "sessionId": "dedup-test",
+                "timestamp": at,
+                "uuid": uuid,
+                "message": {
+                    "model": "claude-opus-5",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "usage": usage.clone(),
+                }
+            })
+            .to_string()
+        };
+        let detail =
+            parse_lines_into_detail(&[line("a1", "2026-03-01T10:00:00Z"), line("a2", "2026-03-01T10:00:01Z")]);
+        assert_eq!(total_usage_tokens(&detail), 30);
+    }
+
+    /// Write a session transcript plus the sub-agent transcripts that live
+    /// beside it, and parse the result.
+    fn parse_with_subagents(
+        lines: &[String],
+        subagents: &[(&str, Vec<String>)],
+    ) -> crate::models::ConversationDetail {
+        let stem = std::env::temp_dir().join(format!("codeg-claude-sub-{}", uuid::Uuid::new_v4()));
+        let path = stem.with_extension("jsonl");
+        let mut file = fs::File::create(&path).expect("create session jsonl");
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+        drop(file);
+
+        let dir = stem.join("subagents");
+        fs::create_dir_all(&dir).expect("create subagents dir");
+        for (agent_id, agent_lines) in subagents {
+            let mut f = fs::File::create(dir.join(format!("agent-{agent_id}.jsonl")))
+                .expect("create subagent jsonl");
+            for line in agent_lines {
+                writeln!(f, "{line}").unwrap();
+            }
+        }
+
+        let detail = ClaudeParser {
+            base_dir: PathBuf::new(),
+        }
+        .parse_conversation_detail(&path, "dedup-test")
+        .expect("parse detail");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&stem);
+        detail
+    }
+
+    fn subagent_line(uuid: &str, message_id: &str, at: &str, tokens: u64) -> String {
+        json!({
+            "type": "assistant",
+            "timestamp": at,
+            "uuid": uuid,
+            "message": {
+                "id": message_id,
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "sub"}],
+                "usage": {
+                    "input_tokens": tokens,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
+            }
+        })
+        .to_string()
+    }
+
+    /// A session that launches a sub-agent, whose `toolUseResult` names it
+    /// twice — the shape that makes reference-following double count.
+    fn session_launching(agent_id: &str, references: usize) -> Vec<String> {
+        let mut lines = vec![assistant_block_line(
+            "a1",
+            "msg_launch",
+            "2026-03-01T10:00:00Z",
+            json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
+            json!({
+                "input_tokens": 1000,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0
+            }),
+        )];
+        for i in 0..references {
+            lines.push(
+                json!({
+                    "type": "user",
+                    "timestamp": "2026-03-01T10:09:00Z",
+                    "uuid": format!("r{i}"),
+                    "message": {
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": "tu1",
+                            "content": "done"
+                        }]
+                    },
+                    "toolUseResult": {"agentType": "general-purpose", "agentId": agent_id}
+                })
+                .to_string(),
+            );
+        }
+        lines
+    }
+
+    #[test]
+    fn a_sub_agents_own_spend_is_counted_against_the_session_that_launched_it() {
+        // `Task` sub-agents keep their own transcript under the session, which
+        // is never opened as a conversation — so nothing counted those tokens.
+        let detail = parse_with_subagents(
+            &session_launching("abc", 1),
+            &[(
+                "abc",
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+            )],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_000);
+    }
+
+    #[test]
+    fn a_sub_agent_named_by_several_tool_results_is_still_counted_once() {
+        // The same `agentId` is reported by more than one result line in real
+        // transcripts, so attribution follows the directory, not the mentions.
+        let detail = parse_with_subagents(
+            &session_launching("abc", 3),
+            &[(
+                "abc",
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+            )],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_000);
+    }
+
+    #[test]
+    fn a_sub_agent_no_tool_result_ever_referenced_still_counts() {
+        // Interrupted, or still running when the session ended: 217 of 295
+        // transcripts in a real tree have no completed result naming them, and
+        // they spent their tokens all the same.
+        let detail = parse_with_subagents(
+            &session_launching("abc", 0),
+            &[(
+                "orphan",
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+            )],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_000);
+    }
+
+    #[test]
+    fn delegated_spend_does_not_inflate_the_parents_context_window() {
+        // The gauge answers "how full is *this* conversation's prompt". A
+        // sub-agent runs in a context of its own, so its tokens are the
+        // session's spend but never its occupancy.
+        let launcher = json!({
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "cache_creation_input_tokens": 300,
+            "cache_read_input_tokens": 400
+        });
+        let detail = parse_with_subagents(
+            &[assistant_block_line(
+                "a1",
+                "msg_launch",
+                "2026-03-01T10:00:00Z",
+                json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
+                launcher,
+            )],
+            &[(
+                "abc",
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 900_000)],
+            )],
+        );
+        let stats = detail.session_stats.expect("session stats");
+        assert_eq!(stats.context_window_used_tokens, Some(1_700));
+        // The spend, however, does include it.
+        assert_eq!(stats.total_tokens, Some(901_900));
+    }
+
+    #[test]
+    fn sub_agent_spend_lands_on_the_turn_that_was_running_when_it_started() {
+        // A session working across midnight must not report a sub-agent's
+        // tokens on whichever day the session happened to end.
+        let mut lines = vec![
+            assistant_block_line(
+                "a1",
+                "msg_before",
+                "2026-03-01T23:00:00Z",
+                json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
+                json!({"input_tokens": 10, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+            ),
+        ];
+        lines.push(assistant_block_line(
+            "a2",
+            "msg_after",
+            "2026-03-02T01:00:00Z",
+            json!({"type": "text", "text": "later"}),
+            json!({"input_tokens": 20, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+        ));
+
+        let detail = parse_with_subagents(
+            &lines,
+            &[(
+                "abc",
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T23:10:00Z", 5_000)],
+            )],
+        );
+        let carrying: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| t.usage.is_some())
+            .map(|t| {
+                (
+                    t.timestamp.to_rfc3339(),
+                    t.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+                )
+            })
+            .collect();
+        assert_eq!(total_usage_tokens(&detail), 5_030);
+        assert!(
+            carrying.iter().any(|(ts, n)| ts.starts_with("2026-03-01") && *n == 5_010),
+            "sub-agent spend belongs to the turn that launched it, got {carrying:?}"
+        );
+    }
+
     #[test]
     fn slash_command_display_reconstructs_command() {
         // command-message-first ordering with args (as written for /init)
@@ -2808,6 +4061,880 @@ mod tests {
             .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))));
         // Title comes from the first real prompt, not any slash command.
         assert_eq!(detail.summary.title.as_deref(), Some("hi"));
+    }
+
+    fn role_name(turn: &MessageTurn) -> &'static str {
+        match turn.role {
+            TurnRole::User => "user",
+            TurnRole::Assistant => "assistant",
+            TurnRole::System => "system",
+        }
+    }
+
+    /// The real `/goal` shape (Claude Code 2.1.x): the command record, its
+    /// `<local-command-stdout>`, then an `isMeta` STRING hook instruction that
+    /// the model answers directly. None of that is the expanded-prompt shape,
+    /// so the old "decide on the very next record" rule dropped the command —
+    /// the user's message vanished from history and the reply was left with no
+    /// prompt above it to anchor the in-flight suppression on.
+    #[test]
+    fn goal_command_renders_as_the_prompt_of_the_turn_it_drove() {
+        let records = [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.000Z",
+                "uuid": "u-goal",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n            <command-args>随便开发一个测试页面</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.100Z",
+                "uuid": "u-out",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<local-command-stdout>Goal set: 随便开发一个测试页面</local-command-stdout>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.320Z",
+                "uuid": "u-hook",
+                "isMeta": true,
+                "promptId": "p1",
+                "message": { "role": "user", "content": "A session-scoped Stop hook is now active with condition: \"随便开发一个测试页面\"." }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:44.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "收到，目标是随便开发一个测试页面。"}] }
+            }),
+        ];
+
+        // Whole feed: the command is the turn's prompt.
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        let roles: Vec<_> = turns.iter().map(role_name).collect();
+        assert_eq!(roles, vec!["user", "assistant"]);
+        assert!(matches!(
+            &turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "/goal 随便开发一个测试页面"
+        ));
+        // The hook instruction is addressed to the model, not spoken by the
+        // user — it must stay out of the transcript.
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("Stop hook"))
+        )));
+
+        // Mid-turn (the model is still thinking, no assistant record yet): the
+        // hook injection alone must already resolve it, because the transcript
+        // tail is what both in-flight anchors match on — and waiting for the
+        // reply would leave that window unanchored. Nothing is flushed at the
+        // end of the feed, so this can only come from the injection.
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records[..3] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(role_name(&turns[0]), "user");
+
+        // …and the promptId is what makes it evidence: the SAME shape with a
+        // foreign id is a cron-fired prompt, which belongs to no command. It
+        // must not resolve one, and with nothing flushed at EOF the command
+        // stays hidden.
+        let mut foreign = records[2].clone();
+        foreign["promptId"] = json!("p-cron");
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [&records[0], &records[1], &foreign] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        assert!(acc.messages.is_empty());
+    }
+
+    /// One `goal_status` attachment record, as Claude Code 2.1.x writes them.
+    fn goal_attachment(timestamp: &str, attachment: serde_json::Value) -> serde_json::Value {
+        json!({
+            "type": "attachment",
+            "uuid": format!("att-{timestamp}"),
+            "timestamp": timestamp,
+            "attachment": attachment,
+        })
+    }
+
+    /// Every synthetic goal tool call a parse produced, in stream order, as
+    /// `(tool_name, goal object)` — the pair the frontend's goal lane reads.
+    fn goal_cards(turns: &[MessageTurn]) -> Vec<(String, serde_json::Value)> {
+        let mut calls: Vec<(String, String)> = Vec::new();
+        let mut outputs: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        for block in turns.iter().flat_map(|t| t.blocks.iter()) {
+            match block {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    tool_name,
+                    ..
+                } if tool_name == "create_goal" || tool_name == "update_goal" => {
+                    calls.push((id.clone(), tool_name.clone()));
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: Some(raw),
+                    ..
+                } => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+                        outputs.insert(id.clone(), parsed);
+                    }
+                }
+                _ => {}
+            }
+        }
+        calls
+            .into_iter()
+            .map(|(id, name)| {
+                let goal = outputs
+                    .get(&id)
+                    .and_then(|out| out.get("goal"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                (name, goal)
+            })
+            .collect()
+    }
+
+    /// A `/goal` used to render a capsule while streaming (the adapter publishes
+    /// `_meta.goal` snapshots) and NOTHING on reload, because the parser had no
+    /// idea the CLI records goal transitions as `goal_status` attachments. It
+    /// does now — and the card has to land BELOW the prompt that set it, which
+    /// the record order fights: the CLI writes the attachment BEFORE the `/goal`
+    /// command record, and a user turn ends the assistant block the card groups
+    /// into, so opening it in stream order would leave a capsule above the
+    /// prompt wrapping nothing.
+    #[test]
+    fn goal_card_opens_below_the_prompt_that_set_it() {
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:43:38.320Z",
+                json!({
+                    "type": "goal_status",
+                    "met": false,
+                    "sentinel": true,
+                    "condition": "随便开发一个测试页面",
+                }),
+            ),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.320Z",
+                "uuid": "u-goal",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/goal</command-name>\n            <command-args>随便开发一个测试页面</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.320Z",
+                "uuid": "u-out",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<local-command-stdout>Goal set: 随便开发一个测试页面</local-command-stdout>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.320Z",
+                "uuid": "u-hook",
+                "isMeta": true,
+                "promptId": "p1",
+                "message": { "role": "user", "content": "A session-scoped Stop hook is now active with condition: \"随便开发一个测试页面\"." }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:44.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "收到。"}] }
+            }),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+
+        // The prompt comes first, then the card, then the work it wraps — the
+        // two assistant turns merge into one block in the view, so the capsule
+        // opens over the reply exactly as the live one does.
+        let roles: Vec<_> = turns.iter().map(role_name).collect();
+        assert_eq!(roles, vec!["user", "assistant", "assistant"]);
+        assert!(matches!(
+            &turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "/goal 随便开发一个测试页面"
+        ));
+        assert_eq!(
+            goal_cards(&turns[..2]),
+            vec![(
+                "create_goal".to_string(),
+                json!({ "objective": "随便开发一个测试页面", "status": "active" })
+            )]
+        );
+
+        // A goal that never reached a reply still has a card — the deferral is
+        // about WHERE it goes, and at the end of a complete file the tail is
+        // where it goes. Live shows the capsule the moment the goal is armed, so
+        // dropping it here would put the two views right back out of step.
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records[..4] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(
+            turns.iter().map(role_name).collect::<Vec<_>>(),
+            vec!["user", "assistant"]
+        );
+        assert_eq!(
+            goal_cards(&turns)
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["create_goal"]
+        );
+
+        // Feeding the same records incrementally — as the live watcher does,
+        // one growing tail per tick, with no end of feed — must land the card in
+        // the same place. Nothing may be synthesized off a tick boundary.
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records[..2] {
+            acc.feed_line(&record.to_string());
+        }
+        assert!(acc.messages.is_empty());
+        for record in &records[2..] {
+            acc.feed_line(&record.to_string());
+        }
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(
+            turns.iter().map(role_name).collect::<Vec<_>>(),
+            vec!["user", "assistant", "assistant"]
+        );
+        assert_eq!(goal_cards(&turns[..2]).len(), 1);
+    }
+
+    /// The Stop hook reports every one of its blocks as a `goal_status`
+    /// attachment. With the run already open those restate what is on screen —
+    /// pushing a card per iteration would spray the transcript with duplicates.
+    #[test]
+    fn a_restated_goal_does_not_open_a_second_card() {
+        let reply = |uuid: &str| {
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:00.000Z",
+                "uuid": uuid,
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "working"}] }
+            })
+        };
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:43:38.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "ship it"}),
+            ),
+            reply("a1"),
+            // The hook blocked again with the goal still open: a restatement,
+            // not a transition.
+            goal_attachment(
+                "2026-08-15T23:44:10.000Z",
+                json!({"type": "goal_status", "met": false, "condition": "ship it", "reason": "not done yet"}),
+            ),
+            reply("a2"),
+            // Achieved: closes the run, and the CLI's own stats ride along.
+            goal_attachment(
+                "2026-08-15T23:45:00.000Z",
+                json!({
+                    "type": "goal_status",
+                    "met": true,
+                    "condition": "ship it",
+                    "reason": "page renders",
+                    "iterations": 3,
+                    "durationMs": 81_600,
+                    "tokens": 5200,
+                }),
+            ),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let cards = goal_cards(&group_into_turns(acc.messages));
+        assert_eq!(
+            cards,
+            vec![
+                (
+                    "create_goal".to_string(),
+                    json!({ "objective": "ship it", "status": "active" })
+                ),
+                (
+                    "update_goal".to_string(),
+                    json!({
+                        "objective": "ship it",
+                        "status": "complete",
+                        "iterations": 3,
+                        // milliseconds on the wire, whole seconds on the card
+                        "timeUsedSeconds": 82,
+                        "tokensUsed": 5200,
+                        "lastReason": "page renders",
+                    })
+                ),
+            ]
+        );
+    }
+
+    /// A feed can START mid-goal: the watcher baselines at the end of whatever
+    /// was already on disk, and a session Claude Code resumed re-arms the hook
+    /// without writing a fresh arming record. Then the Stop hook's own
+    /// restatement is the only evidence a goal is running, and the card has to
+    /// come from it — Claude Code reads these records the same way (an
+    /// attachment that is neither met nor failed means the goal is still on).
+    #[test]
+    fn a_feed_that_starts_mid_goal_opens_the_card_from_a_restatement() {
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:44:10.000Z",
+                json!({"type": "goal_status", "met": false, "condition": "ship it", "reason": "not done yet"}),
+            ),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:20.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "still working"}] }
+            }),
+            // A second restatement adds nothing: the card is open now.
+            goal_attachment(
+                "2026-08-15T23:44:30.000Z",
+                json!({"type": "goal_status", "met": false, "condition": "ship it", "reason": "still not done"}),
+            ),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:40.000Z",
+                "uuid": "a2",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "more"}] }
+            }),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let cards = goal_cards(&group_into_turns(acc.messages));
+        assert_eq!(
+            cards,
+            vec![(
+                "create_goal".to_string(),
+                json!({
+                    "objective": "ship it",
+                    "status": "active",
+                    "lastReason": "not done yet",
+                })
+            )]
+        );
+    }
+
+    /// Re-aiming a goal before the first one ever reached a reply replaces it.
+    /// That is what the live view shows for the same session: both openings are
+    /// published, but they land in one assistant block, where a second `active`
+    /// goal takes over the open run instead of stacking a second capsule. (When
+    /// each `/goal` DOES drive its own reply the two openings are separated by a
+    /// user turn, nothing merges them, and both cards render — that path is
+    /// unaffected because the first is released at its own reply.)
+    #[test]
+    fn re_aiming_before_any_reply_leaves_one_card() {
+        let command = |uuid: &str, prompt: &str, objective: &str| {
+            [
+                goal_attachment(
+                    &format!("2026-08-15T23:43:{uuid}.000Z"),
+                    json!({"type": "goal_status", "met": false, "sentinel": true, "condition": objective}),
+                ),
+                json!({
+                    "type": "user",
+                    "timestamp": format!("2026-08-15T23:43:{uuid}.000Z"),
+                    "uuid": format!("u-{prompt}"),
+                    "promptId": prompt,
+                    "message": { "role": "user", "content": format!("<command-name>/goal</command-name>\n<command-args>{objective}</command-args>") }
+                }),
+                json!({
+                    "type": "user",
+                    "timestamp": format!("2026-08-15T23:43:{uuid}.100Z"),
+                    "uuid": format!("h-{prompt}"),
+                    "isMeta": true,
+                    "promptId": prompt,
+                    "message": { "role": "user", "content": format!("A session-scoped Stop hook is now active with condition: \"{objective}\".") }
+                }),
+            ]
+        };
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in command("38", "p1", "ship A")
+            .iter()
+            .chain(command("44", "p2", "ship B").iter())
+        {
+            acc.feed_line(&record.to_string());
+        }
+        acc.feed_line(
+            &json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:50.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "on it"}] }
+            })
+            .to_string(),
+        );
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+
+        // Both prompts stay; the card that opens over the work is the live goal.
+        assert_eq!(
+            turns.iter().map(role_name).collect::<Vec<_>>(),
+            vec!["user", "user", "assistant", "assistant"]
+        );
+        assert_eq!(
+            goal_cards(&turns),
+            vec![(
+                "create_goal".to_string(),
+                json!({ "objective": "ship B", "status": "active" })
+            )]
+        );
+    }
+
+    /// A feed can also join a goal only in time to see it END — the watcher
+    /// baselines mid-run, or the arming record lives in a transcript this one
+    /// was resumed from. The close is written on its own rather than invented an
+    /// opening for it: a lone `update_goal` renders as a finished goal card,
+    /// which is exactly what the transcript says happened, and a synthesized
+    /// opener would claim a run this feed never witnessed.
+    #[test]
+    fn joining_a_goal_at_its_end_writes_the_close_alone() {
+        let records = [
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:20.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "last step"}] }
+            }),
+            goal_attachment(
+                "2026-08-15T23:45:00.000Z",
+                json!({
+                    "type": "goal_status",
+                    "met": true,
+                    "condition": "ship it",
+                    "iterations": 2,
+                    "durationMs": 4_400,
+                    "tokens": 900,
+                }),
+            ),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let cards = goal_cards(&group_into_turns(acc.messages));
+        assert_eq!(
+            cards,
+            vec![(
+                "update_goal".to_string(),
+                json!({
+                    "objective": "ship it",
+                    "status": "complete",
+                    "iterations": 2,
+                    "timeUsedSeconds": 4,
+                    "tokensUsed": 900,
+                })
+            )]
+        );
+    }
+
+    /// A goal the model judged impossible ends as `blocked` — the goal
+    /// extension's own vocabulary for a failed goal, which the card labels and
+    /// tones as an error. "failed" is not in that vocabulary and would render as
+    /// the raw untranslated word.
+    #[test]
+    fn an_impossible_goal_closes_the_run_as_blocked() {
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:43:38.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "ship it"}),
+            ),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:00.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "working"}] }
+            }),
+            goal_attachment(
+                "2026-08-15T23:45:00.000Z",
+                json!({
+                    "type": "goal_status",
+                    "met": false,
+                    "failed": true,
+                    "condition": "ship it",
+                    "reason": "no deploy credentials",
+                }),
+            ),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let cards = goal_cards(&group_into_turns(acc.messages));
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[1].0, "update_goal");
+        assert_eq!(cards[1].1["status"], "blocked");
+        assert_eq!(cards[1].1["lastReason"], "no deploy credentials");
+    }
+
+    /// Clearing a goal is written as `met` with the arming flag set, so it ends
+    /// the run like an achieved one. Cleared before any reply, the open is still
+    /// waiting to be released — it has to come out WITH the close, or the
+    /// transcript keeps a terminal card that ends no run.
+    #[test]
+    fn clearing_before_any_reply_still_renders_the_whole_run() {
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:43:38.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "ship it"}),
+            ),
+            goal_attachment(
+                "2026-08-15T23:43:50.000Z",
+                json!({"type": "goal_status", "met": true, "sentinel": true, "condition": "ship it"}),
+            ),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let cards = goal_cards(&group_into_turns(acc.messages));
+        assert_eq!(
+            cards.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            vec!["create_goal", "update_goal"]
+        );
+        assert_eq!(cards[1].1["status"], "complete");
+    }
+
+    /// Attachments are how the CLI hands the model context it did not ask for —
+    /// agent listings, skill listings, task reminders. None of them are
+    /// conversation, and a `goal_status` with no condition names no goal.
+    #[test]
+    fn other_attachments_never_reach_the_transcript() {
+        let records = [
+            goal_attachment(
+                "2026-08-15T23:43:38.000Z",
+                json!({"type": "skill_listing", "content": "- some-skill: …"}),
+            ),
+            goal_attachment(
+                "2026-08-15T23:43:39.000Z",
+                json!({"type": "task_reminder", "content": [], "itemCount": 0}),
+            ),
+            goal_attachment(
+                "2026-08-15T23:43:40.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "   "}),
+            ),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:44:00.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "content": [{"type": "text", "text": "hi"}] }
+            }),
+        ];
+
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(goal_cards(&turns), vec![]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(role_name(&turns[0]), "assistant");
+    }
+
+    /// Evidence the command drove a turn can also arrive as an interrupt
+    /// marker: it is only ever written against a request that was running. The
+    /// turn may have no output at all, which is exactly when its prompt is the
+    /// only thing left to explain it.
+    #[test]
+    fn interrupted_command_turn_keeps_its_prompt() {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.000Z",
+                "uuid": "u-goal",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/goal</command-name>\n<command-args>ship it</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:39.000Z",
+                "uuid": "u-int",
+                "message": { "role": "user", "content": "[Request interrupted by user]" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:44:00.000Z",
+                "uuid": "u1",
+                "message": { "role": "user", "content": [{"type": "text", "text": "never mind"}] }
+            }),
+        ] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        let texts: Vec<_> = turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["/goal ship it", "never mind"]);
+    }
+
+    /// The fallback evidence, for a shape the stronger rules can't see: no
+    /// `promptId` to correlate an injection with (nothing in today's corpus
+    /// reaches this — every real command resolves at its expansion, injection or
+    /// interrupt — but a CLI that stops stamping submission ids must degrade to
+    /// a visible prompt, not to the invisible-user-message bug).
+    #[test]
+    fn a_reply_alone_still_resolves_a_command_with_no_submission_id() {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.000Z",
+                "uuid": "u-goal",
+                "message": { "role": "user", "content": "<command-name>/goal</command-name>\n<command-args>ship it</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.100Z",
+                "uuid": "u-out",
+                "message": { "role": "user", "content": "<local-command-stdout>Goal set: ship it</local-command-stdout>" }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:44.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "On it."}] }
+            }),
+        ] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(turns.len(), 2);
+        assert!(matches!(
+            &turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "/goal ship it"
+        ));
+    }
+
+    /// The degradation path must stay coherent end to end: with no submission
+    /// ids anywhere, the command's OWN injection is indistinguishable from a
+    /// foreign one, so it must not be treated as a refutation — otherwise the
+    /// record that proves the command drove a turn is the very thing that
+    /// discards it, and the reply-based fallback never gets to run.
+    #[test]
+    fn a_command_survives_its_own_injection_when_nothing_carries_an_id() {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.000Z",
+                "uuid": "u-goal",
+                "message": { "role": "user", "content": "<command-name>/goal</command-name>\n<command-args>ship it</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.100Z",
+                "uuid": "u-out",
+                "message": { "role": "user", "content": "<local-command-stdout>Goal set: ship it</local-command-stdout>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:38.200Z",
+                "uuid": "u-hook",
+                "isMeta": true,
+                "message": { "role": "user", "content": "A session-scoped Stop hook is now active with condition: ship it." }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:44.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "On it."}] }
+            }),
+        ] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert_eq!(turns.len(), 2);
+        assert!(matches!(
+            &turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "/goal ship it"
+        ));
+    }
+
+    /// A stale buffered command must not be adopted by an unrelated turn. The
+    /// accumulator is also fed incrementally by the background watcher, which
+    /// never ends its feed, so a client command can sit buffered indefinitely —
+    /// and the reply that eventually arrives may belong to a cron prompt that
+    /// landed in between. The foreign injection retires it.
+    #[test]
+    fn a_foreign_injection_retires_a_stale_buffered_command() {
+        let records = [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.000Z",
+                "uuid": "u-model",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/model</command-name>\n<command-args>sonnet</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.100Z",
+                "uuid": "u-out",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<local-command-stdout>Set model to sonnet</local-command-stdout>" }
+            }),
+            // Hours later: a cron-fired prompt — same isMeta STRING shape as the
+            // `/goal` hook, but a submission of its own.
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-16T02:00:00.000Z",
+                "uuid": "u-cron",
+                "promptId": "p2",
+                "isMeta": true,
+                "userType": "external",
+                "message": { "role": "user", "content": "iterate forever" }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-16T02:00:05.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "Resuming the loop."}] }
+            }),
+        ];
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in &records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert!(
+            !turns.iter().any(|t| t.blocks.iter().any(
+                |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+            )),
+            "the cron owns that reply — the command must not claim its prompt slot"
+        );
+    }
+
+    /// A `<task-notification>` settling mid-wait owns the reply that follows it
+    /// (background work reporting back), so it refutes the buffered command
+    /// rather than letting it claim that reply's prompt slot.
+    #[test]
+    fn task_notification_refutes_a_buffered_command() {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.000Z",
+                "uuid": "u-model",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/model</command-name>\n<command-args>sonnet</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.100Z",
+                "uuid": "u-out",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<local-command-stdout>Set model to sonnet</local-command-stdout>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:30.000Z",
+                "uuid": "u-note",
+                "message": { "role": "user", "content": "<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n</task-notification>" }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:31.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "The build finished."}] }
+            }),
+        ] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+        )));
+    }
+
+    /// A client-only command stays hidden even when the CLI writes several
+    /// inert records before the next prompt — the lookahead walks past command
+    /// output and attachments without deciding, and only the real prompt does.
+    #[test]
+    fn client_command_stays_hidden_across_inert_records() {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in [
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.000Z",
+                "uuid": "u-model",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>sonnet</command-args>" }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:42:59.100Z",
+                "uuid": "u-out",
+                "promptId": "p1",
+                "message": { "role": "user", "content": "<local-command-stdout>Set model to sonnet</local-command-stdout>" }
+            }),
+            json!({"type": "attachment", "timestamp": "2026-08-15T23:42:59.200Z", "uuid": "att"}),
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:10.000Z",
+                "uuid": "u1",
+                "message": { "role": "user", "content": [{"type": "text", "text": "hi"}] }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:11.000Z",
+                "uuid": "a1",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "Hello."}] }
+            }),
+        ] {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        let turns = group_into_turns(acc.messages);
+        let roles: Vec<_> = turns.iter().map(role_name).collect();
+        assert_eq!(roles, vec!["user", "assistant"]);
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+        )));
     }
 
     #[test]

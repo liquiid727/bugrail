@@ -25,9 +25,10 @@ use crate::acp::question::{
     build_outcome, QuestionAnswer, QuestionOutcome, QuestionSpec, RegisteredQuestion,
     SessionQuestionAccess,
 };
+use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
-    ForkResultInfo, PromptInputBlock,
+    ForkResultInfo, PromptCapabilitiesInfo, PromptInputBlock,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
@@ -201,6 +202,10 @@ pub struct ConnectionManager {
     /// tests; in production initialized from env via
     /// `spawn_handshake_timeout_from_env`.
     spawn_handshake_timeout: Duration,
+    /// Shared General Settings shell used by ACP terminal fallbacks. Cloned
+    /// into each connection runtime so a setting update applies to existing
+    /// model sessions as well as newly spawned ones.
+    terminal_shell_config: TerminalShellRuntimeConfig,
     /// Delegation broker + token registry + UDS path installed during app
     /// bootstrap (`install_delegation`). When present, `spawn_agent` propagates
     /// the injection to `spawn_agent_connection`, which makes
@@ -262,6 +267,7 @@ impl ConnectionManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
+            terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
@@ -275,6 +281,7 @@ impl ConnectionManager {
             connections: self.connections.clone(),
             spawn_locks: self.spawn_locks.clone(),
             spawn_handshake_timeout: self.spawn_handshake_timeout,
+            terminal_shell_config: self.terminal_shell_config.clone(),
             delegation_injection: self.delegation_injection.clone(),
             probe_locks: self.probe_locks.clone(),
             pending_questions: self.pending_questions.clone(),
@@ -293,6 +300,13 @@ impl ConnectionManager {
         self.delegation_injection.get().cloned()
     }
 
+    /// Returns the shared terminal-shell setting consumed by ACP terminal
+    /// runtimes. Keeping the handle shared makes saves apply immediately to
+    /// connections that are already running.
+    pub fn terminal_shell_config(&self) -> TerminalShellRuntimeConfig {
+        self.terminal_shell_config.clone()
+    }
+
     /// Test-only constructor that overrides the spawn-handshake timeout.
     /// Production code should use `new()`.
     #[cfg(test)]
@@ -301,6 +315,7 @@ impl ConnectionManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: timeout,
+            terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
@@ -478,6 +493,7 @@ impl ConnectionManager {
             preferred_mode_id,
             preferred_config_values,
             self.delegation_snapshot(),
+            self.terminal_shell_config.clone(),
         )
         .await?;
 
@@ -730,6 +746,14 @@ impl ConnectionManager {
         {
             let mut s = state_arc.write().await;
             if s.turn_in_flight {
+                // Names the gate, not just the outcome: the linked path checks
+                // the same flag once before its side effects and again here, and
+                // the two lines share a module target with no file/line in the
+                // default format — identical text would be unattributable.
+                tracing::debug!(
+                    connection_id = %conn_id,
+                    "[ACP] prompt rejected at the send gate: a turn is already in flight"
+                );
                 return Err(AcpError::TurnInProgress);
             }
             s.turn_in_flight = true;
@@ -891,6 +915,12 @@ impl ConnectionManager {
         // InProgress or broadcasting a phantom user message. The frontend turns
         // this rejection into a queued message above the input box.
         if turn_in_flight {
+            // Distinct from `send_prompt_inner`'s send-gate line so a log reader
+            // can tell which of the two checks bounced the prompt.
+            tracing::debug!(
+                connection_id = %conn_id,
+                "[ACP] prompt rejected before admission: a turn is already in flight"
+            );
             return Err(AcpError::TurnInProgress);
         }
 
@@ -1208,25 +1238,95 @@ impl ConnectionManager {
             .map_err(|_| AcpError::ProcessExited)
     }
 
-    /// Pause or clear the session's active Codex goal via the connection loop
-    /// (codex-acp #293). Looked up by connectionId; the loop sources the
-    /// sessionId from the live session, so callers only supply the action.
+    /// Pause or clear the session's active goal via the connection loop
+    /// (codex-acp #293; the provider-neutral `_session/goal` since codex 1.2 /
+    /// claude 0.66). Looked up by connectionId; the loop sources the sessionId
+    /// from the live session, so callers only supply the action.
+    ///
+    /// STOPS THE RUNNING TURN TOO, for adapters whose control request travels
+    /// out of band (see `registry::goal_control_is_out_of_band`). Without that,
+    /// the button is a lie: codex's pause/clear are pure app-server metadata
+    /// that only take hold at the next idle point, so the user clicks 暂停 and
+    /// watches the agent keep working — the whole reason the goal card's
+    /// controls were once ripped out.
+    ///
+    /// Two conditions guard it, and neither is "is a turn running?":
+    /// * the goal must have been ACTIVE when the user clicked
+    ///   (`SessionState.goal_active`, read before the request goes out). An
+    ///   active goal is the thing driving the work, so stopping the work is
+    ///   what the click means. A PAUSED goal drives nothing — clearing one is
+    ///   housekeeping, and must never abort a turn the user started themselves
+    ///   in the meantime.
+    /// * the control must have LANDED. The loop reports that back over a
+    ///   oneshot; a rejected request (or a closed channel) leaves the turn
+    ///   alone, so a goal that is still `active` never gets its work killed
+    ///   only to have codex resume it at the next idle point. The round-trip
+    ///   also makes the interrupt strictly second: the goal is already
+    ///   non-active when the abort lands, so nothing auto-continues on the way
+    ///   out.
+    ///
+    /// Liveness deliberately does NOT gate it. `ConnectionStatus::Prompting`
+    /// (and `turn_in_flight` with it) tracks turns CODEG started, and a goal
+    /// loop's continuations are started by codex itself — detached turns no host
+    /// request owns — so gating on them would skip the interrupt in exactly the
+    /// case that motivated this. Any post-hoc read is unsound anyway: by the
+    /// time the manager acts on it the turn it described may have ended. With
+    /// the goal known active, the interrupt means precisely "press Stop on the
+    /// user's behalf": `cancel()`'s row write is CAS'd from `InProgress`, a
+    /// `session/cancel` with nothing running is a no-op, and its permission
+    /// drain / delegation cascade are the semantics the Stop button already has
+    /// (including its own turn-boundary race, which is not made worse here).
+    ///
+    /// Awaiting the round-trip is deliberate and cheap — an out-of-band control
+    /// is a plain RPC that returns without waiting for the turn. It is NOT
+    /// cancellation-shielded (unlike `submit_feedback_native`): a caller that
+    /// disappears mid-await simply doesn't get the follow-up interrupt, which is
+    /// the pre-existing behavior, never worse. The control itself is owned by
+    /// the loop from the moment it is enqueued.
     pub async fn goal_control(
         &self,
+        db: &DatabaseConnection,
         conn_id: &str,
         action: GoalControlAction,
     ) -> Result<(), AcpError> {
-        let cmd_tx = {
+        let (cmd_tx, agent_type, state_arc) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            conn.cmd_tx.clone()
+            (conn.cmd_tx.clone(), conn.agent_type, conn.state.clone())
+        };
+        // Read the goal state as it was when the user clicked — reading it after
+        // the round-trip would see the transition we just asked for.
+        let interrupts = crate::acp::registry::goal_control_is_out_of_band(agent_type)
+            && state_arc.read().await.goal_active;
+        // Only ask for an answer when it would change what we do next.
+        let (reply_tx, reply_rx) = if interrupts {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
         };
         cmd_tx
-            .send(ConnectionCommand::GoalControl { action })
+            .send(ConnectionCommand::GoalControl {
+                action,
+                reply: reply_tx,
+            })
             .await
-            .map_err(|_| AcpError::ProcessExited)
+            .map_err(|_| AcpError::ProcessExited)?;
+
+        let Some(reply_rx) = reply_rx else {
+            return Ok(());
+        };
+        if !matches!(reply_rx.await, Ok(true)) {
+            return Ok(());
+        }
+        tracing::info!(
+            "[ACP] goal {:?} landed; interrupting so the work stops now connection={}",
+            action,
+            conn_id
+        );
+        self.cancel(db, conn_id).await
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
@@ -1399,6 +1499,10 @@ impl ConnectionManager {
         // underneath us, but we never SET it: not setting the gate is precisely
         // why a dropped fork can't wedge the connection.
         if state_arc.read().await.turn_in_flight {
+            tracing::debug!(
+                connection_id = %conn_id,
+                "[ACP] fork rejected: a turn is already in flight"
+            );
             return Err(AcpError::TurnInProgress);
         }
 
@@ -1492,9 +1596,15 @@ impl ConnectionManager {
         }
     }
 
-    /// Persist the two-row fork layout: re-point the current row at S2 with a
-    /// `[Fork]` title prefix, and INSERT a sibling row preserving the pre-fork
-    /// (S1) history at `PendingReview`. Returns the sibling row id.
+    /// Persist the two-row fork layout: re-point the current row at S2 under a
+    /// locked `[Fork]` title prefix, and INSERT a sibling row preserving the
+    /// pre-fork (S1) history at `PendingReview`, which inherits the original's
+    /// title lock. Returns the sibling row id.
+    ///
+    /// Both titles outlive the per-turn auto-title backfill by design: neither
+    /// the user's own name nor codeg's `[Fork] ` marker exists in the session
+    /// file the backfill re-parses, so an unlocked row would silently revert to
+    /// the parsed title on its next detail load.
     ///
     /// Factored out of [`fork_session`] so the cancellation-shielded task body
     /// stays readable. Everything runs in one transaction so a mid-sequence
@@ -1589,6 +1699,16 @@ impl ConnectionManager {
                     let folder_id = current.folder_id;
                     let agent_type_str = current.agent_type.clone();
                     let git_branch = current.git_branch.clone();
+                    // The lock rides along with the title it protects: the
+                    // sibling holds the pre-fork history of the very row the
+                    // user renamed, so a hand-picked name has to stay locked
+                    // there too. Born unlocked, the sibling's first detail load
+                    // re-parses S1 and lets `refresh_auto_title` adopt the
+                    // session-file title — the rename silently reverting on the
+                    // conversation the fork was supposed to leave untouched.
+                    // Inheriting (not forcing) keeps an auto-titled sibling
+                    // eligible for later backfills.
+                    let title_locked = current.title_locked;
                     // The sibling keeps the original's sidebar routing (a forked
                     // chat conversation must stay in the Chat group). `Delegate`
                     // is unreachable here — children are never forked from the
@@ -1606,6 +1726,20 @@ impl ConnectionManager {
                     let mut active: conversation::ActiveModel = current.into();
                     if let Some(ref clean) = clean_title {
                         active.title = Set(Some(format!("[Fork] {clean}")));
+                        // ...and lock it. The `[Fork] ` marker is codeg's own —
+                        // no parser derives it from a transcript — so on an
+                        // unlocked row it survives only until the next detail
+                        // load, where the auto-title backfill adopts the
+                        // session-file title and the two rows this fork just
+                        // created end up wearing the SAME name. Forking is a
+                        // deliberate user action on a conversation the user
+                        // named (or accepted the name of), so treating the
+                        // result as user-set is honest; the cost is that the
+                        // forked row stops tracking the session file's title,
+                        // exactly as a rename would. A titleless row writes no
+                        // title here and stays unlocked, so the backfill can
+                        // still give it its first name.
+                        active.title_locked = Set(true);
                     }
                     active.external_id = Set(Some(forked_session_id));
                     active.updated_at = Set(now);
@@ -1617,7 +1751,7 @@ impl ConnectionManager {
                         id: NotSet,
                         folder_id: Set(folder_id),
                         title: Set(clean_title),
-                        title_locked: Set(false),
+                        title_locked: Set(title_locked),
                         agent_type: Set(agent_type_str),
                         status: Set(ConversationStatus::PendingReview),
                         kind: Set(sibling_kind),
@@ -1790,7 +1924,13 @@ impl ConnectionManager {
         let grace_period = Duration::from_millis(500);
         let mut selectors_ready_at: Option<std::time::Instant> = None;
         loop {
-            let (config_options, modes, available_commands, selectors_ready) = {
+            let (
+                config_options,
+                modes,
+                available_commands,
+                prompt_capabilities,
+                selectors_ready,
+            ) = {
                 let conns = self.connections.lock().await;
                 let conn = conns
                     .get(conn_id)
@@ -1800,6 +1940,7 @@ impl ConnectionManager {
                     s.config_options.clone(),
                     s.modes.clone(),
                     s.available_commands.clone(),
+                    s.prompt_capabilities.clone(),
                     s.selectors_ready,
                 )
             };
@@ -1812,6 +1953,7 @@ impl ConnectionManager {
                         modes,
                         config_options: config_options.unwrap_or_default(),
                         available_commands,
+                        prompt_capabilities,
                     });
                 }
             }
@@ -2006,6 +2148,9 @@ impl ConnectionManager {
                 title: String::new(),
                 status: state.status.clone(),
                 pending,
+                // Same reason as `title`: resolving a delegation child's parent
+                // needs the DB. Filled by `pet_list_active_sessions_core`.
+                parent: None,
             });
         }
         out
@@ -2038,6 +2183,49 @@ impl ConnectionManager {
         connections
             .get(conn_id)
             .map(|conn| (conn.state.clone(), conn.emitter.clone()))
+    }
+
+    /// Wait (bounded) for the connected agent to say what a prompt may carry.
+    ///
+    /// `spawn_agent` returns as soon as the process is up and registered: it
+    /// only holds for `SessionStarted` when deduplicating a RESUME, so a fresh
+    /// session's `initialize` — which is what publishes these capabilities
+    /// (`emit_prompt_capabilities`) — is still in flight when it returns. A
+    /// caller that must know the encoding before its first prompt therefore has
+    /// to ask, rather than read the state and find `None`.
+    ///
+    /// `None` means the wait ran out or the connection went away; callers treat
+    /// that as "no information" and send what they already had, never as an
+    /// error — the prompt itself is about to surface any real problem.
+    pub async fn wait_for_prompt_capabilities(
+        &self,
+        conn_id: &str,
+        timeout: Duration,
+    ) -> Option<PromptCapabilitiesInfo> {
+        let state = {
+            let connections = self.connections.lock().await;
+            connections.get(conn_id)?.state.clone()
+        };
+        let start = std::time::Instant::now();
+        loop {
+            {
+                let s = state.read().await;
+                if let Some(caps) = s.prompt_capabilities.clone() {
+                    return Some(caps);
+                }
+                // A connection that already died will never advertise anything.
+                if matches!(
+                    s.status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                ) {
+                    return None;
+                }
+            }
+            if start.elapsed() >= timeout {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Append a live-feedback note to a connection's session and broadcast it.
@@ -3394,6 +3582,174 @@ mod tests {
             .await
             .insert(conn_id.to_string(), conn);
         rx
+    }
+
+    /// Put a turn in flight on a connection inserted by
+    /// [`insert_live_connection`] (which starts them `Connected`).
+    async fn mark_prompting(mgr: &ConnectionManager, conn_id: &str) {
+        let state = mgr.get_state(conn_id).await.expect("connection");
+        state.write().await.status = ConnectionStatus::Prompting;
+    }
+
+    /// Mirror what a live `active` goal snapshot leaves on the state.
+    async fn mark_goal_active(mgr: &ConnectionManager, conn_id: &str) {
+        let state = mgr.get_state(conn_id).await.expect("connection");
+        state.write().await.goal_active = true;
+    }
+
+    /// Stand in for the connection loop's `GoalControl` arm: take the command,
+    /// assert the action, answer `landed`, and hand the receiver back so the
+    /// test can see what (if anything) the manager enqueues next. Returns a
+    /// JoinHandle because `goal_control` blocks on that answer.
+    fn answer_goal_control(
+        mut rx: tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+        expected: GoalControlAction,
+        landed: bool,
+    ) -> tokio::task::JoinHandle<tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>>
+    {
+        tokio::spawn(async move {
+            match rx.recv().await.expect("goal control enqueued") {
+                ConnectionCommand::GoalControl { action, reply } => {
+                    assert_eq!(action, expected);
+                    reply
+                        .expect("an interrupting caller attaches a reply")
+                        .send(landed)
+                        .expect("manager is listening");
+                }
+                _ => panic!("expected a GoalControl command"),
+            }
+            rx
+        })
+    }
+
+    #[tokio::test]
+    async fn a_codex_goal_pause_mid_turn_interrupts_the_turn_after_the_goal_rpc() {
+        // codex's pause is app-server metadata: it stops the goal from starting
+        // ANOTHER turn but never touches the one that is running, so without
+        // the interrupt the user clicks Pause and watches the agent keep
+        // working. Order matters — the goal RPC has to LAND first, so the goal
+        // is already non-active when the turn aborts and nothing auto-continues
+        // on the way out.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-codex", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-codex").await;
+        mark_goal_active(&mgr, "c-goal-codex").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Pause, true);
+
+        mgr.goal_control(&db.conn, "c-goal-codex", GoalControlAction::Pause)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)));
+        assert!(rx.try_recv().is_err(), "nothing else is enqueued");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_goal_control_leaves_the_turn_alone() {
+        // The agent refused the pause (bad params, unknown session, dead
+        // process). The goal is still active, so killing the turn would destroy
+        // in-flight work AND let codex resume the goal at the next idle point —
+        // strictly worse than the error banner the loop already emitted.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-refused", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-refused").await;
+        mark_goal_active(&mgr, "c-goal-refused").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Pause, false);
+
+        mgr.goal_control(&db.conn, "c-goal-refused", GoalControlAction::Pause)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(rx.try_recv().is_err(), "a failed control cancels nothing");
+    }
+
+    #[tokio::test]
+    async fn a_codex_goal_clear_interrupts_even_when_codeg_thinks_it_is_idle() {
+        // Codeg's `Prompting` only covers turns IT started. A goal loop's
+        // continuations are started by codex — detached turns no host request
+        // owns — so the session reads "connected" while the agent is very much
+        // working, which is precisely when the user hits Clear. Gating on our
+        // own turn bookkeeping would skip the interrupt exactly there, so the
+        // interrupt is not gated on liveness: with an ACTIVE goal, whatever is
+        // running is the goal's work, and with nothing running the interrupt is
+        // the same harmless no-op the Stop button is.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-idle", AgentType::Codex, None).await;
+        mark_goal_active(&mgr, "c-goal-idle").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Clear, true);
+
+        mgr.goal_control(&db.conn, "c-goal-idle", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)));
+        assert!(rx.try_recv().is_err(), "nothing else is enqueued");
+    }
+
+    #[tokio::test]
+    async fn clearing_a_paused_goal_never_touches_the_users_own_turn() {
+        // A paused goal drives nothing, so a turn running alongside it is
+        // something the user started themselves. Dismissing the stale card is
+        // housekeeping — killing that prompt (and draining its permissions, and
+        // cascading to its delegations) would be destroying unrelated work.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "c-goal-paused", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-paused").await; // the user's own prompt
+        // `goal_active` stays false: the last snapshot was `paused`.
+
+        mgr.goal_control(&db.conn, "c-goal-paused", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        match rx.try_recv() {
+            Ok(ConnectionCommand::GoalControl { action, reply }) => {
+                assert_eq!(action, GoalControlAction::Clear);
+                assert!(reply.is_none(), "no interrupt is intended, so none waits");
+            }
+            _ => panic!("expected a GoalControl command"),
+        }
+        assert!(rx.try_recv().is_err(), "the user's turn survives");
+    }
+
+    #[tokio::test]
+    async fn a_claude_goal_clear_never_interrupts_the_turn_carrying_it() {
+        // claude-agent-acp implements `_session/goal` by STEERING the text
+        // "/goal clear" into the running turn (or prompting when idle).
+        // Cancelling would kill the message that carries the clear and leave
+        // the goal armed — worse than doing nothing. Same for every adapter
+        // whose control channel we haven't verified. No interrupt is intended,
+        // so no reply is even asked for and the call doesn't wait.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx =
+            insert_live_connection(&mgr, "c-goal-claude", AgentType::ClaudeCode, None).await;
+        mark_prompting(&mgr, "c-goal-claude").await;
+        mark_goal_active(&mgr, "c-goal-claude").await;
+
+        mgr.goal_control(&db.conn, "c-goal-claude", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        match rx.try_recv() {
+            Ok(ConnectionCommand::GoalControl { action, reply }) => {
+                assert_eq!(action, GoalControlAction::Clear);
+                assert!(reply.is_none(), "nobody waits on an in-band control");
+            }
+            _ => panic!("expected a GoalControl command"),
+        }
+        assert!(rx.try_recv().is_err(), "the carrying turn survives");
     }
 
     #[tokio::test]
@@ -4929,6 +5285,7 @@ mod tests {
                 tool_call: serde_json::json!({ "toolCallId": "tc-1", "title": "test" }),
                 options: vec![],
                 created_at: chrono::Utc::now(),
+                queued: 0,
             });
         }
         let n = mgr.sweep_idle(Duration::from_secs(300)).await;
@@ -5491,6 +5848,234 @@ mod tests {
             sibling.title.as_deref(),
             Some("Renamed By User"),
             "sibling must preserve the LATEST committed title, not a stale snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_session_sibling_inherits_the_manual_title_lock() {
+        // A rename locks the row (`update_title` sets `title_locked`) precisely
+        // so the per-turn auto-title backfill can never overwrite the user's
+        // name. The sibling the fork inserts IS that conversation's pre-fork
+        // history, so it must inherit the lock: without it the user's name
+        // survives only until the sibling's first detail load, which re-parses
+        // S1 and adopts the session-file title (rename → fork → the original
+        // conversation silently reverts to its pre-rename name).
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-lock").await;
+
+        // "XXX" stands in for the session-file (parser-derived) title.
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("XXX".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::update_title(&db.conn, pre.id, "YYY".into())
+            .await
+            .unwrap();
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-lock", pre.id, "session-S2", "session-S1").await;
+        let result = mgr.fork_session(&db, "c-fork-lock", None, None).await.unwrap();
+        let _ = join.await;
+
+        let sibling_id = result.sibling_conversation_id;
+        let sibling = conversation_service::get_by_id(&db.conn, sibling_id)
+            .await
+            .unwrap();
+        assert_eq!(sibling.title.as_deref(), Some("YYY"));
+        assert!(
+            sibling.title_locked,
+            "the sibling carries the renamed conversation's history, so it must \
+             inherit the manual title lock"
+        );
+        // The forked row keeps the lock it already had (it is the same row).
+        let current = conversation_service::get_by_id(&db.conn, pre.id)
+            .await
+            .unwrap();
+        assert_eq!(current.title.as_deref(), Some("[Fork] YYY"));
+        assert!(current.title_locked);
+
+        // End-to-end guard: this is exactly what the next detail load does
+        // (`get_folder_conversation_with_live_core` → `refresh_auto_title` with
+        // the title parsed out of the S1 transcript). It must be a no-op on
+        // both rows.
+        assert!(
+            !conversation_service::refresh_auto_title(&db.conn, sibling_id, "XXX".into())
+                .await
+                .unwrap(),
+            "the auto-title backfill must not revert the sibling's user-set name"
+        );
+        assert!(
+            !conversation_service::refresh_auto_title(&db.conn, pre.id, "XXX".into())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, sibling_id)
+                .await
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("YYY")
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_session_locks_the_prefixed_title_it_writes() {
+        // The `[Fork] ` marker exists nowhere in the transcript, so on an
+        // unlocked row the very next detail load erases it: the auto-title
+        // backfill adopts the parsed session-file title, leaving the forked row
+        // and its sibling wearing the same name with nothing to tell them
+        // apart. The fork therefore locks the title it writes.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-prefix-lock").await;
+
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Auto Title".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!pre.title_locked, "an auto-titled row starts unlocked");
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-prefix", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-fork-prefix", None, None)
+            .await
+            .unwrap();
+        let _ = join.await;
+
+        let current = conversation_service::get_by_id(&db.conn, pre.id)
+            .await
+            .unwrap();
+        assert_eq!(current.title.as_deref(), Some("[Fork] Auto Title"));
+        assert!(
+            current.title_locked,
+            "the fork's own title must be protected from the auto-title backfill"
+        );
+        // The backfill the next detail load runs, with the title parsed out of
+        // the forked transcript (a copy of S1, so the pre-fork title).
+        assert!(
+            !conversation_service::refresh_auto_title(&db.conn, pre.id, "Auto Title".into())
+                .await
+                .unwrap(),
+            "the backfill must not strip the `[Fork] ` marker"
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, pre.id)
+                .await
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("[Fork] Auto Title")
+        );
+        // The sibling wears the parsed title itself, so it needs no such
+        // protection — see `fork_session_sibling_stays_unlocked_for_an_auto_title`.
+        assert!(
+            !conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+                .await
+                .unwrap()
+                .title_locked
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_session_leaves_a_titleless_row_unlocked() {
+        // Nothing to prefix means nothing to protect: a row forked before it
+        // ever got a title must stay unlocked, or the auto-title backfill could
+        // never give it its first name and it would read "Untitled" forever.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-untitled").await;
+
+        let pre =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-untitled", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-fork-untitled", None, None)
+            .await
+            .unwrap();
+        let _ = join.await;
+
+        let current = conversation_service::get_by_id(&db.conn, pre.id)
+            .await
+            .unwrap();
+        assert_eq!(current.title, None, "no title to prefix");
+        assert!(!current.title_locked, "an unwritten title must stay unlocked");
+        let sibling = conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(sibling.title, None);
+        assert!(!sibling.title_locked);
+        // Both rows can still be named by the backfill.
+        assert!(
+            conversation_service::refresh_auto_title(&db.conn, pre.id, "First Name".into())
+                .await
+                .unwrap()
+        );
+        assert!(
+            conversation_service::refresh_auto_title(&db.conn, sibling.id, "First Name".into())
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_session_sibling_stays_unlocked_for_an_auto_title() {
+        // Inheriting the lock must mean INHERITING it, not always setting it:
+        // an auto-titled conversation's sibling stays eligible for the
+        // auto-title backfill, so a title the agent regenerates later still
+        // lands on the preserved history.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-unlocked").await;
+
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Auto Title".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!pre.title_locked, "a fresh row starts unlocked");
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-unlocked", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-fork-unlocked", None, None)
+            .await
+            .unwrap();
+        let _ = join.await;
+
+        let sibling_id = result.sibling_conversation_id;
+        assert!(
+            !conversation_service::get_by_id(&db.conn, sibling_id)
+                .await
+                .unwrap()
+                .title_locked,
+            "an auto-derived title must not become locked by forking"
+        );
+        assert!(
+            conversation_service::refresh_auto_title(&db.conn, sibling_id, "Newer Title".into())
+                .await
+                .unwrap(),
+            "the backfill must still be able to update an unlocked sibling"
         );
     }
 

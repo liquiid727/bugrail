@@ -22,6 +22,8 @@ export type WorkbenchRouteId =
   | "conversations"
   | "automations"
   | "tasks"
+  | "teams"
+  | "context"
   | "tokenUsage"
 
 interface WorkbenchRouteContextValue {

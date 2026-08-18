@@ -9,6 +9,7 @@
 
 pub mod acp;
 pub mod acp_transcript;
+pub mod agent_runtime;
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
@@ -19,6 +20,7 @@ pub mod automation;
 pub mod backgrounds;
 pub mod chat_channel;
 pub mod commands;
+pub mod context;
 pub mod db;
 pub mod folder_links;
 pub mod git_credential;
@@ -34,9 +36,11 @@ pub mod paths;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
 pub mod pets;
+pub mod product;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
+pub mod specos_control;
 pub mod supervise;
 mod terminal;
 pub mod turn_timings;
@@ -63,7 +67,8 @@ mod tauri_app {
     use crate::commands::{
         acp as acp_commands, app_update as app_update_commands,
         automation as automation_commands, background as background_commands, backup,
-        chat_channel as chat_channel_commands, conversations,
+        chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
+        conversations,
         custom_skills as custom_skills_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
         folder_links, office_tools as office_tools_commands,
@@ -73,6 +78,7 @@ mod tauri_app {
         remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
         session_info as session_info_commands,
+        specos_control as specos_control_commands,
         system_settings, terminal as terminal_commands,
         token_usage as token_usage_commands,
         version_control, windows, work_task as work_task_commands,
@@ -109,8 +115,11 @@ mod tauri_app {
             summarize_web_auto_start_error(err)
         );
         tauri::async_runtime::spawn(async move {
-            let _ =
-                notification::send_notification(app, "Codeg Web service".to_string(), body).await;
+            let title = format!(
+                "{} Web service",
+                crate::product::PRODUCT_MANIFEST.display_name
+            );
+            let _ = notification::send_notification(app, title, body).await;
         });
     }
 
@@ -178,7 +187,7 @@ mod tauri_app {
         // Skipped in debug builds so a locally-built `cargo run` instance
         // can run alongside an installed release build of codeg during
         // development. Debug desktop builds use an isolated SQLite file, but
-        // they still share other `app.codeg` data-dir artifacts with release.
+        // they still share other product data-dir artifacts with release.
         #[cfg(not(debug_assertions))]
         let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             windows::show_main_window(app);
@@ -427,6 +436,46 @@ mod tauri_app {
                     });
                 }
 
+                // Push the persisted default shell into the ACP terminal
+                // runtime BEFORE any background task that can spawn an agent
+                // (the chat-channel dispatcher below is one). The handle is
+                // read at terminal-create time, so a late seed would only ever
+                // be a narrow race — but "seeded before anything can connect"
+                // is cheap to guarantee here and matches server startup, which
+                // seeds before it binds.
+                {
+                    let db_for_shell = app.state::<db::AppDatabase>().conn.clone();
+                    let shell_config = app.state::<ConnectionManager>().terminal_shell_config();
+                    tauri::async_runtime::block_on(async move {
+                        crate::commands::system_settings::apply_persisted_terminal_shell_config(
+                            &db_for_shell,
+                            &shell_config,
+                        )
+                        .await;
+                    });
+                }
+
+                // Label worktree folders registered before aliases were seeded at
+                // creation with the branch they have checked out, so the sidebar
+                // names them by branch rather than by their (long, derived)
+                // directory. Background, non-blocking; changed folders are
+                // broadcast, so a client that already fetched its folder list
+                // still picks them up.
+                {
+                    let db = db::AppDatabase {
+                        conn: app.state::<db::AppDatabase>().conn.clone(),
+                    };
+                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    tauri::async_runtime::spawn(async move {
+                        let n =
+                            crate::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
+                                .await;
+                        if n > 0 {
+                            tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
+                        }
+                    });
+                }
+
                 // Start chat channel background tasks
                 {
                     let ccm = app.state::<ChatChannelManager>();
@@ -525,6 +574,7 @@ mod tauri_app {
                         feedback_config,
                         question_config,
                         session_info_config,
+                        chat_authoring_config,
                     ) = crate::app_state::build_delegation_stack(
                         &cm_state,
                         db_conn.clone(),
@@ -535,6 +585,7 @@ mod tauri_app {
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
                     app.manage(session_info_config.clone());
+                    app.manage(chat_authoring_config.clone());
                     app.manage(crate::commands::delegation::DelegationSocketPath(
                         socket_path.clone(),
                     ));
@@ -546,6 +597,7 @@ mod tauri_app {
                     let feedback_for_init = feedback_config.clone();
                     let question_for_init = question_config.clone();
                     let session_info_for_init = session_info_config.clone();
+                    let chat_authoring_for_init = chat_authoring_config.clone();
                     tauri::async_runtime::block_on(async move {
                         delegation_commands::apply_persisted_config(
                             &db_for_init,
@@ -565,6 +617,11 @@ mod tauri_app {
                         crate::commands::session_info::apply_persisted_session_info_config(
                             &db_for_init,
                             &session_info_for_init,
+                        )
+                        .await;
+                        crate::commands::chat_authoring::apply_persisted_chat_authoring_config(
+                            &db_for_init,
+                            &chat_authoring_for_init,
                         )
                         .await;
                     });
@@ -596,6 +653,17 @@ mod tauri_app {
                             ),
                         ),
                         std::sync::Arc::new(crate::work_task::EngineWorkTaskTools),
+                        std::sync::Arc::new(
+                            crate::commands::chat_authoring::DbChatAuthoring::new(
+                                std::sync::Arc::new(db::AppDatabase {
+                                    conn: db_conn.clone(),
+                                }),
+                                crate::web::event_bridge::EventEmitter::Tauri(
+                                    app.handle().clone(),
+                                ),
+                                chat_authoring_config.clone(),
+                            ),
+                        ),
                     );
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = listener.run(socket_path).await {
@@ -712,7 +780,7 @@ mod tauri_app {
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App("workspace".into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
-                        .title("Codeg")
+                        .title(crate::product::PRODUCT_MANIFEST.display_name)
                         .inner_size(1260.0, 860.0)
                         .min_inner_size(400.0, 600.0);
                     let builder = windows::apply_platform_window_style(builder);
@@ -918,6 +986,7 @@ mod tauri_app {
                 conversations::scan_importable_sessions,
                 conversations::import_selected_sessions,
                 conversations::get_folder_conversation,
+                conversations::get_folder_conversation_turns,
                 conversations::list_folders,
                 conversations::get_stats,
                 conversations::get_sidebar_data,
@@ -992,6 +1061,7 @@ mod tauri_app {
                 folders::git_merge,
                 folders::git_rebase,
                 folders::git_delete_branch,
+                folders::git_remove_worktree,
                 folders::git_delete_remote_branch,
                 folders::git_list_conflicts,
                 folders::git_conflict_file_versions,
@@ -1112,6 +1182,8 @@ mod tauri_app {
                 question_commands::set_question_settings,
                 session_info_commands::get_session_info_settings,
                 session_info_commands::set_session_info_settings,
+                chat_authoring_commands::get_chat_authoring_settings,
+                chat_authoring_commands::set_chat_authoring_settings,
                 version_control::detect_git,
                 version_control::test_git_path,
                 version_control::get_git_settings,
@@ -1160,6 +1232,10 @@ mod tauri_app {
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
                 acp_commands::acp_validate_pi_command,
+                acp_commands::acp_pi_project_trust_state,
+                acp_commands::acp_pi_set_project_trust,
+                acp_commands::acp_pi_acknowledge_project_trust,
+                acp_commands::acp_pi_list_trust_entries,
                 acp_commands::acp_install_pi_binary,
                 acp_commands::acp_uninstall_pi_binary,
                 acp_commands::acp_open_hermes_setup_terminal,
@@ -1260,9 +1336,12 @@ mod tauri_app {
                 work_task_commands::work_task_start_all,
                 work_task_commands::work_task_retry,
                 work_task_commands::work_task_requeue,
+                work_task_commands::work_task_schedule,
                 work_task_commands::work_task_return,
                 work_task_commands::work_task_cancel,
                 work_task_commands::work_task_merge,
+                work_task_commands::work_task_merge_unqueue,
+                work_task_commands::work_task_complete,
                 work_task_commands::work_task_archive,
                 work_task_commands::work_task_cleanup,
                 work_task_commands::work_task_diff,
@@ -1275,6 +1354,29 @@ mod tauri_app {
                 work_task_commands::work_task_template_list,
                 work_task_commands::work_task_template_save,
                 work_task_commands::work_task_template_delete,
+                work_task_commands::work_task_contract_preview,
+                work_task_commands::work_task_contract_bind,
+                work_task_commands::work_task_contract_get,
+                work_task_commands::work_task_gate_list,
+                work_task_commands::work_task_gate_decision,
+                work_task_commands::work_task_gate_human_decide,
+                specos_control_commands::specos_agent_catalog_get,
+                specos_control_commands::specos_agent_catalog_save,
+                specos_control_commands::specos_team_catalog_get,
+                specos_control_commands::specos_team_catalog_save,
+                specos_control_commands::specos_team_run_list,
+                specos_control_commands::specos_team_run_start,
+                specos_control_commands::specos_team_run_control,
+                specos_control_commands::specos_context_config_get,
+                specos_control_commands::specos_context_config_save,
+                specos_control_commands::specos_context_overview,
+                specos_control_commands::specos_context_package_get,
+                specos_control_commands::specos_work_task_runs,
+                specos_control_commands::specos_work_task_dependencies,
+                specos_control_commands::specos_work_task_handoff_get,
+                specos_control_commands::specos_work_task_handoff_save,
+                specos_control_commands::specos_work_task_integration_plan,
+                specos_control_commands::specos_work_task_integration_refresh,
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,

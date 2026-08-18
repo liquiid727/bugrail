@@ -631,7 +631,10 @@ fn build_lark_card(msg: &RichMessage) -> serde_json::Value {
         MessageLevel::Error => "red",
     };
 
-    let title = msg.title.as_deref().unwrap_or("Codeg");
+    let title = msg
+        .title
+        .as_deref()
+        .unwrap_or(crate::product::PRODUCT_MANIFEST.display_name);
 
     let mut elements: Vec<serde_json::Value> = Vec::new();
 
@@ -695,6 +698,12 @@ fn build_lark_card(msg: &RichMessage) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_without_an_explicit_title_uses_the_product_name() {
+        let card = build_lark_card(&RichMessage::info("Ready"));
+        assert_eq!(card["header"]["title"]["content"], "Code: Bugrail");
+    }
 
     /// The card body must render as `plain_text`, never `markdown` — an event
     /// body can carry user-authored content (e.g. `user_prompt_sent`), and a

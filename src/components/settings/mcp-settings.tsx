@@ -11,6 +11,7 @@ import {
   TerminalSquare,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { useImeGuard } from "@/hooks/use-ime-guard"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -97,6 +98,7 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "kimi_code", label: "Kimi Code" },
   { value: "grok", label: "Grok" },
   { value: "cursor", label: "Cursor" },
+  { value: "deepseek", label: "DeepSeek Harness" },
 ]
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -263,6 +265,7 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     kimi_code: appSet.has("kimi_code"),
     grok: appSet.has("grok"),
     cursor: appSet.has("cursor"),
+    deepseek: appSet.has("deepseek"),
   }
 }
 
@@ -321,6 +324,7 @@ function parseJsonObject(
 
 export function McpSettings() {
   const t = useTranslations("McpSettings")
+  const ime = useImeGuard()
   const mcpT = useMemo(() => t as unknown as McpTranslator, [t])
   const [loading, setLoading] = useState(true)
   const [loadingError, setLoadingError] = useState<string | null>(null)
@@ -1174,8 +1178,10 @@ export function McpSettings() {
                     value={marketQuery}
                     onChange={(event) => setMarketQuery(event.target.value)}
                     placeholder={t("market.searchPlaceholder")}
+                    {...ime.props}
                     onKeyDown={(event) => {
-                      if (event.key !== "Enter") return
+                      if (ime.isComposing(event) || event.key !== "Enter")
+                        return
                       executeSearch({
                         providerId: selectedProvider,
                         query: marketQuery,

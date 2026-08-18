@@ -94,8 +94,20 @@ pub fn build_router(
             post(handlers::session_info::set_session_info_settings),
         )
         .route(
+            "/get_chat_authoring_settings",
+            post(handlers::chat_authoring::get_chat_authoring_settings),
+        )
+        .route(
+            "/set_chat_authoring_settings",
+            post(handlers::chat_authoring::set_chat_authoring_settings),
+        )
+        .route(
             "/get_folder_conversation",
             post(handlers::conversations::get_folder_conversation),
+        )
+        .route(
+            "/get_folder_conversation_turns",
+            post(handlers::conversations::get_folder_conversation_turns),
         )
         .route(
             "/list_opened_tabs",
@@ -384,6 +396,10 @@ pub fn build_router(
         .route("/git_commit", post(handlers::git::git_commit))
         .route("/git_fetch_remote", post(handlers::git::git_fetch_remote))
         .route("/git_delete_branch", post(handlers::git::git_delete_branch))
+        .route(
+            "/git_remove_worktree",
+            post(handlers::git::git_remove_worktree),
+        )
         .route(
             "/git_delete_remote_branch",
             post(handlers::git::git_delete_remote_branch),
@@ -727,6 +743,22 @@ pub fn build_router(
         .route(
             "/acp_validate_pi_command",
             post(handlers::acp::acp_validate_pi_command),
+        )
+        .route(
+            "/acp_pi_project_trust_state",
+            post(handlers::acp::acp_pi_project_trust_state),
+        )
+        .route(
+            "/acp_pi_set_project_trust",
+            post(handlers::acp::acp_pi_set_project_trust),
+        )
+        .route(
+            "/acp_pi_acknowledge_project_trust",
+            post(handlers::acp::acp_pi_acknowledge_project_trust),
+        )
+        .route(
+            "/acp_pi_list_trust_entries",
+            post(handlers::acp::acp_pi_list_trust_entries),
         )
         .route(
             "/acp_install_pi_binary",
@@ -1277,6 +1309,10 @@ pub fn build_router(
             post(handlers::work_task::work_task_requeue),
         )
         .route(
+            "/work_task_schedule",
+            post(handlers::work_task::work_task_schedule),
+        )
+        .route(
             "/work_task_return",
             post(handlers::work_task::work_task_return),
         )
@@ -1287,6 +1323,14 @@ pub fn build_router(
         .route(
             "/work_task_merge",
             post(handlers::work_task::work_task_merge),
+        )
+        .route(
+            "/work_task_merge_unqueue",
+            post(handlers::work_task::work_task_merge_unqueue),
+        )
+        .route(
+            "/work_task_complete",
+            post(handlers::work_task::work_task_complete),
         )
         .route(
             "/work_task_archive",
@@ -1300,6 +1344,75 @@ pub fn build_router(
         .route(
             "/work_task_changed_files",
             post(handlers::work_task::work_task_changed_files),
+        )
+        // ─── SpecOS Agent Team + Context ───
+        .route(
+            "/specos_agent_catalog_get",
+            post(handlers::specos_control::agent_get),
+        )
+        .route(
+            "/specos_agent_catalog_save",
+            post(handlers::specos_control::agent_save),
+        )
+        .route(
+            "/specos_team_catalog_get",
+            post(handlers::specos_control::team_get),
+        )
+        .route(
+            "/specos_team_catalog_save",
+            post(handlers::specos_control::team_save),
+        )
+        .route(
+            "/specos_team_run_list",
+            post(handlers::specos_control::team_run_list),
+        )
+        .route(
+            "/specos_team_run_start",
+            post(handlers::specos_control::team_run_start),
+        )
+        .route(
+            "/specos_team_run_control",
+            post(handlers::specos_control::team_run_control),
+        )
+        .route(
+            "/specos_context_config_get",
+            post(handlers::specos_control::context_get),
+        )
+        .route(
+            "/specos_context_config_save",
+            post(handlers::specos_control::context_save),
+        )
+        .route(
+            "/specos_context_overview",
+            post(handlers::specos_control::context_overview),
+        )
+        .route(
+            "/specos_context_package_get",
+            post(handlers::specos_control::context_package_get),
+        )
+        .route(
+            "/specos_work_task_runs",
+            post(handlers::specos_control::task_runs),
+        )
+        .route(
+            "/specos_work_task_dependencies",
+            post(handlers::specos_control::task_dependencies),
+        )
+        .route(
+            "/specos_work_task_handoff_get",
+            post(handlers::specos_control::handoff_get),
+        )
+        .route(
+            "/specos_work_task_handoff_save",
+            post(handlers::specos_control::handoff_save),
+        )
+        .route(
+            "/specos_work_task_integration_plan",
+            post(handlers::specos_control::integration_plan),
+        )
+        .route(
+            "/specos_work_task_integration_refresh",
+            post(handlers::specos_control::integration_refresh),
         )
         .route(
             "/work_task_settings_get",
@@ -1332,6 +1445,30 @@ pub fn build_router(
         .route(
             "/work_task_template_delete",
             post(handlers::work_task::work_task_template_delete),
+        )
+        .route(
+            "/work_task_contract_preview",
+            post(handlers::work_task::work_task_contract_preview),
+        )
+        .route(
+            "/work_task_contract_bind",
+            post(handlers::work_task::work_task_contract_bind),
+        )
+        .route(
+            "/work_task_contract_get",
+            post(handlers::work_task::work_task_contract_get),
+        )
+        .route(
+            "/work_task_gate_list",
+            post(handlers::work_task::work_task_gate_list),
+        )
+        .route(
+            "/work_task_gate_decision",
+            post(handlers::work_task::work_task_gate_decision),
+        )
+        .route(
+            "/work_task_gate_human_decide",
+            post(handlers::work_task::work_task_gate_human_decide),
         )
         // ─── Workspace background ───
         .route(
@@ -1524,6 +1661,11 @@ pub fn build_router(
         .layer(cors)
         .layer(Extension(state))
         .layer(Extension(shutdown_signal))
+        // Outermost: compress API JSON and static text assets. Allowlist
+        // predicate — binary downloads keep their exact Content-Length (the
+        // remote proxy's progress source) and SSE stays unbuffered; see
+        // `web::compression`.
+        .layer(crate::web::compression::compression_layer())
 }
 
 async fn health_check() -> impl IntoResponse {

@@ -182,7 +182,7 @@ describe("StatusBarUpdate — popover", () => {
     })
     fireEvent.click(link)
     expect(openUrl).toHaveBeenCalledWith(
-      "https://github.com/xintaofei/codeg/releases/latest"
+      "https://github.com/liquiid727/bugrail/releases/latest"
     )
     expect(startUpdate).not.toHaveBeenCalled()
   })

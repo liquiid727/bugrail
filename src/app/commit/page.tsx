@@ -16,6 +16,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { FolderDetail } from "@/lib/types"
 import { GitCredentialProvider } from "@/contexts/git-credential-context"
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
+import { formatProductTitle } from "@/lib/product-manifest"
 
 const TOAST_DURATION_MS = 6000
 
@@ -83,7 +84,7 @@ function CommitPageInner() {
   const pageTitle = folder ? `${t("title")} · ${folder.name}` : t("title")
 
   useEffect(() => {
-    document.title = `${pageTitle} - codeg`
+    document.title = formatProductTitle(pageTitle)
   }, [pageTitle])
 
   return (

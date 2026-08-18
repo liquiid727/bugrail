@@ -129,6 +129,65 @@ describe("AgentToolCallPart title", () => {
     )
     expect(screen.queryByText("abcd1234")).not.toBeInTheDocument()
   })
+
+  it("renders a codex native sub-agent by name alone, with no prompt panel", () => {
+    // codex 0.147's team-of-agents encrypts the hand-off message, so neither
+    // the live signal (`classify_codex_subagent_activity`) nor the rollout can
+    // supply a prompt or description — the capsule is name + thread badge.
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "pnpm_build",
+          prompt: "",
+          description: "",
+          agent_id: "01a0098a-7e8a-72d3-b7c0-2df130c84063",
+          __codegCodexSubagentLaunch: true,
+        }),
+        "output-available"
+      )
+    )
+    expect(screen.getByText("pnpm_build")).toBeInTheDocument()
+    expect(screen.getByText("01a0098a")).toBeInTheDocument()
+    // No empty "Prompt" disclosure, and above all no base64 anywhere.
+    expect(screen.queryByText("Prompt")).not.toBeInTheDocument()
+    // The settled card must not read as "the sub-agent finished": codex only
+    // acknowledged the launch, and an async child may still be working.
+    // Completed capsules mount collapsed; expand to see the body.
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText(/reports no further progress/)).toBeInTheDocument()
+  })
+
+  it("does not claim launch-only semantics for an ordinary sub-agent card", () => {
+    // Claude's Task, the legacy codex collab spawn, … all settle when the
+    // sub-agent really is done, and must not carry the caveat.
+    renderCard({
+      ...basePart(
+        JSON.stringify({ subagent_type: "Explore", description: "map" }),
+        "output-available"
+      ),
+      output: "Mapped 12 files.",
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.getByText("Mapped 12 files.")).toBeInTheDocument()
+    expect(
+      screen.queryByText(/reports no further progress/)
+    ).not.toBeInTheDocument()
+  })
+
+  it("holds the launch caveat back while the spawn is still in flight", () => {
+    renderCard(
+      basePart(
+        JSON.stringify({
+          subagent_type: "pnpm_build",
+          __codegCodexSubagentLaunch: true,
+        }),
+        "input-available"
+      )
+    )
+    expect(
+      screen.queryByText(/reports no further progress/)
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe("AgentToolCallPart cursor task outcome envelope", () => {
@@ -279,5 +338,137 @@ describe("AgentToolCallPart live subagent transcript", () => {
     expect(screen.queryByText("entry-4")).not.toBeInTheDocument()
     expect(screen.getByText("entry-5")).toBeInTheDocument()
     expect(screen.getByText("entry-24")).toBeInTheDocument()
+  })
+})
+
+describe("AgentToolCallPart grok live progress", () => {
+  const runningPart = (meta: Record<string, unknown> | null): ToolCallPart => ({
+    ...basePart(
+      JSON.stringify({ subagent_type: "explore", description: "map repo" }),
+      "input-available"
+    ),
+    meta,
+  })
+
+  it("renders the subagent_progress ticker while running", () => {
+    renderCard(
+      runningPart({
+        grokSubagentProgress: {
+          durationMs: 4200,
+          turnCount: 1,
+          toolCallCount: 7,
+          contextUsagePct: 12.4,
+        },
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Running" }))
+    expect(
+      screen.getByText("7 tool calls · 1 turns · 4.2s · context 12%")
+    ).toBeInTheDocument()
+  })
+
+  it("skips absent fields and non-numeric shapes", () => {
+    renderCard(
+      runningPart({
+        grokSubagentProgress: { toolCallCount: 3, contextUsagePct: "nope" },
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Running" }))
+    expect(screen.getByText("3 tool calls")).toBeInTheDocument()
+  })
+
+  it("hides the ticker once the card settles", () => {
+    const part: ToolCallPart = {
+      ...basePart(
+        JSON.stringify({ subagent_type: "explore", description: "map repo" }),
+        "output-available"
+      ),
+      output: "final result",
+      meta: { grokSubagentProgress: { toolCallCount: 9 } },
+    }
+    renderCard(part)
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(screen.queryByText(/9 tool calls/)).not.toBeInTheDocument()
+    expect(screen.getByText("final result")).toBeInTheDocument()
+  })
+
+  it("shows the ticker alongside a background launch ack", () => {
+    // A background spawn: the call is settled (ack output), the child still
+    // runs — the ticker keeps updating in-turn next to "running in background".
+    const part: ToolCallPart = {
+      ...basePart(
+        JSON.stringify({ subagent_type: "explore", description: "map repo" }),
+        "output-available"
+      ),
+      output: "Subagent started in background.\nsubagent_id: sub-1",
+      meta: { grokSubagentProgress: { toolCallCount: 5 } },
+    }
+    renderCard(part)
+    fireEvent.click(
+      screen.getByRole("button", { name: /running in background/i })
+    )
+    expect(screen.getByText("5 tool calls")).toBeInTheDocument()
+    // The raw ack text is never dumped as the result body.
+    expect(
+      screen.queryByText(/Subagent started in background/)
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("AgentToolCallPart child session action", () => {
+  it("offers the child's session from the live spawn meta", () => {
+    // Grok forwards none of the child's work over ACP, so the action has to be
+    // there WHILE it runs — the meta stamp is what makes that possible.
+    renderCard({
+      ...basePart(
+        JSON.stringify({ subagent_type: "explore", description: "map repo" }),
+        "input-available"
+      ),
+      meta: {
+        grokSubagentSession: {
+          subagentId: "sub-1",
+          childSessionId: "019fe6bf-0bcb-70c2-a02d-e5c006dfc32a",
+        },
+      },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Running" }))
+    expect(
+      screen.getByRole("button", { name: "View sub-agent session" })
+    ).toBeInTheDocument()
+  })
+
+  it("offers it from the parsed stats on a settled historical card", () => {
+    renderCard({
+      ...basePart(
+        JSON.stringify({ subagent_type: "explore", description: "map repo" }),
+        "output-available"
+      ),
+      output: "final result",
+      agentStats: {
+        agent_type: "explore",
+        status: "completed",
+        child_session_id: "019fe6bf-0bcb-70c2-a02d-e5c006dfc32a",
+      },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(
+      screen.getByRole("button", { name: "View sub-agent session" })
+    ).toBeInTheDocument()
+  })
+
+  it("stays hidden for a sub-agent with no session of its own", () => {
+    // Every other agent folds its child into the parent transcript — there is
+    // nothing to open.
+    renderCard({
+      ...basePart(
+        JSON.stringify({ subagent_type: "Explore", description: "map repo" }),
+        "output-available"
+      ),
+      output: "final result",
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }))
+    expect(
+      screen.queryByRole("button", { name: "View sub-agent session" })
+    ).not.toBeInTheDocument()
   })
 })

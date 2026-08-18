@@ -264,6 +264,7 @@ async fn async_main() -> ExitCode {
         feedback_config,
         question_config,
         session_info_config,
+        chat_authoring_config,
     ) = codeg_lib::app_state::build_delegation_stack(
         &connection_manager,
         db.conn.clone(),
@@ -289,6 +290,7 @@ async fn async_main() -> ExitCode {
         feedback_config: feedback_config.clone(),
         question_config: question_config.clone(),
         session_info_config: session_info_config.clone(),
+        chat_authoring_config: chat_authoring_config.clone(),
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
     });
@@ -325,6 +327,21 @@ async fn async_main() -> ExitCode {
         &session_info_config,
     )
     .await;
+    // Same for the chat-authoring flags, so the first companion launch knows
+    // whether to advertise `create_automation` / `create_work_task`.
+    codeg_lib::commands::chat_authoring::apply_persisted_chat_authoring_config(
+        &state.db.conn,
+        &chat_authoring_config,
+    )
+    .await;
+    // Keep ACP model terminal fallbacks aligned with the same default-shell
+    // preference used by the built-in terminal before accepting connections.
+    let terminal_shell_config = state.connection_manager.terminal_shell_config();
+    codeg_lib::commands::system_settings::apply_persisted_terminal_shell_config(
+        &state.db.conn,
+        &terminal_shell_config,
+    )
+    .await;
 
     // Spawn the delegation listener so companion processes can round-trip
     // through the broker. Path is PID-scoped, so the listener owns it for
@@ -348,6 +365,13 @@ async fn async_main() -> ExitCode {
                 }),
             )),
             Arc::new(codeg_lib::work_task::EngineWorkTaskTools),
+            Arc::new(codeg_lib::commands::chat_authoring::DbChatAuthoring::new(
+                Arc::new(codeg_lib::db::AppDatabase {
+                    conn: state.db.conn.clone(),
+                }),
+                state.emitter.clone(),
+                chat_authoring_config.clone(),
+            )),
         );
         let socket = delegation_socket_path.clone();
         tokio::spawn(async move {
@@ -482,6 +506,24 @@ async fn async_main() -> ExitCode {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
     }
 
+    // Label worktree folders registered before aliases were seeded at creation
+    // with the branch they have checked out (mirrors lib.rs setup). Background;
+    // changed folders are broadcast, so a browser that already fetched its
+    // folder list still picks them up.
+    {
+        let db = codeg_lib::db::AppDatabase {
+            conn: state.db.conn.clone(),
+        };
+        let emitter = state.emitter.clone();
+        tokio::spawn(async move {
+            let n =
+                codeg_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db).await;
+            if n > 0 {
+                tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
+            }
+        });
+    }
+
     // Sweep abandoned upload staging files from any prior run before
     // serving the first request. The quota log/validate ran earlier in
     // `main` so strict-mode misconfigurations abort before we touch
@@ -549,6 +591,8 @@ async fn async_main() -> ExitCode {
 
 fn default_data_dir() -> PathBuf {
     dirs::data_dir()
-        .map(|d| d.join("codeg"))
-        .unwrap_or_else(|| PathBuf::from(".codeg-data"))
+        .map(|d| d.join(codeg_lib::product::PRODUCT_MANIFEST.platform_data_dir_name))
+        .unwrap_or_else(|| {
+            PathBuf::from(codeg_lib::product::PRODUCT_MANIFEST.server_fallback_data_dir_name)
+        })
 }

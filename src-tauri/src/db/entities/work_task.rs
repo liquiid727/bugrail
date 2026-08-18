@@ -80,10 +80,11 @@ pub struct Model {
     /// against it.
     #[sea_orm(column_type = "Text")]
     pub merge_state: Option<String>,
-    /// JSON `WorkTaskPendingMerge` — the auto-remerge intent carried across a
-    /// conflict-repair cycle (P2). Set when a stage-A conflict dispatches the
-    /// agent, consumed when the repaired run settles into review; cleared by
-    /// every user-driven claim / cancel / failure.
+    /// JSON `WorkTaskQueuedMerge` — a merge the user asked for while the
+    /// folder's one merge slot was busy. Written by `queue_merge`, consumed by
+    /// the folder's merge pump (and by `begin_merge`, whichever dispatch wins);
+    /// cleared by every user-driven claim / cancel / failure, so a task that
+    /// leaves review never carries a stale intent.
     #[sea_orm(column_type = "Text")]
     pub pending_merge: Option<String>,
     /// NULL = nothing pending; 'failed' = worktree cleanup failed (retryable).
@@ -102,6 +103,11 @@ pub struct Model {
     /// Archived (hidden from the default board view); terminal statuses only.
     /// Cleared by any resurrection (retry / requeue / return).
     pub archived_at: Option<DateTimeUtc>,
+    /// Planned start of a `todo` task; NULL = no plan. The scheduler claims the
+    /// row and clears this column in the SAME transaction, so a plan fires
+    /// exactly once — and every explicit claim clears it too, because a task
+    /// that already started has no start left to plan.
+    pub scheduled_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,

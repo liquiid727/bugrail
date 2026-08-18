@@ -669,6 +669,7 @@ impl OpenClawParser {
         super::relocate_orphaned_tool_results(&mut turns);
         super::structurize_read_tool_output(&mut turns);
         super::resolve_patch_line_numbers(&mut turns, cwd.as_deref());
+        super::backfill_turn_durations(&mut turns, &[]);
 
         let context_window_used_tokens = latest_turn_total_usage_tokens(&turns);
         let context_window_max_tokens = session_meta
@@ -1017,6 +1018,7 @@ fn extract_assistant_content(value: &serde_json::Value) -> Vec<ContentBlock> {
                         tool_use_id,
                         tool_name,
                         input_preview,
+                        status: None,
                         meta: None,
                     });
                 }

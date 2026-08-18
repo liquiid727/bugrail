@@ -9,6 +9,7 @@ pub mod model_provider;
 pub mod pet;
 pub mod quick_message;
 pub mod remote_workspace_connection;
+pub mod specos_control;
 pub mod system;
 pub mod token_usage;
 pub mod work_task;
@@ -22,9 +23,9 @@ pub use automation::{
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
-    DbConversationDetail, DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult,
-    ImportSelectedResult, ScanFolder, ScanResult, ScanSession, ScanSessionStatus,
-    SelectedSessionKey, SessionStats, SidebarData,
+    ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo,
+    ImportFolderOutcome, ImportResult, ImportSelectedResult, ScanFolder, ScanResult, ScanSession,
+    ScanSessionStatus, SelectedSessionKey, SessionStats, SidebarData,
 };
 pub use folder::{
     FolderCommandInfo, FolderDetail, FolderHistoryEntry, OpenedTab, OpenedTabsSnapshot,
@@ -36,6 +37,7 @@ pub use message::{
 };
 pub use quick_message::QuickMessageInfo;
 pub use remote_workspace_connection::RemoteWorkspaceConnectionInfo;
+pub use specos_control::*;
 pub use token_usage::{
     TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,
     TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint,
@@ -43,9 +45,13 @@ pub use token_usage::{
     TokenUsageSyncStatus, TokenUsageTotals,
 };
 pub use work_task::{
-    WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
-    WorkTaskInfo, WorkTaskMergeState, WorkTaskPreflight, WorkTaskStatus,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo, STAGE_PROMPT_ALL,
+    AcceptanceCriterionSnapshot, FollowUpIntent, GateDecisionItem, GateRequirement,
+    WorkTaskChangedFile, WorkTaskConfig, WorkTaskContractDraft, WorkTaskContractInfo,
+    WorkTaskContractPreview, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
+    WorkTaskGateDecision, WorkTaskGatePolicy, WorkTaskGateResultInfo, WorkTaskGateStatus,
+    WorkTaskGateType, WorkTaskInfo, WorkTaskMergeState, WorkTaskPreflight, WorkTaskQueuedMerge,
+    WorkTaskStatus, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    STAGE_PROMPT_ALL,
 };
 #[cfg(feature = "tauri-runtime")]
 pub use system::SystemRenderingSettings;

@@ -232,7 +232,12 @@ pub(crate) async fn lookup_credential(
         "sqlite:{}?mode=ro",
         urlencoding::encode(&db_path.to_string_lossy())
     );
-    let opts = sea_orm::ConnectOptions::new(db_url);
+    let mut opts = sea_orm::ConnectOptions::new(db_url);
+    // Match every other `ConnectOptions` in the tree: sqlx logs each statement,
+    // with its SQL text, at INFO. Here that lands on the helper's **stderr**,
+    // which git splices into the agent's / terminal's output — the one thing the
+    // contract above ("all miss paths are silent") exists to prevent.
+    opts.sqlx_logging(false);
     let conn = sea_orm::Database::connect(opts)
         .await
         .map_err(|e| format!("open db: {e}"))?;
@@ -272,20 +277,18 @@ fn parse_data_dir_arg<I: IntoIterator<Item = String>>(args: I) -> Option<std::pa
 
 /// Resolve the app data directory (same path Tauri uses).
 fn resolve_app_data_dir() -> Option<std::path::PathBuf> {
-    // On macOS: ~/Library/Application Support/app.codeg
-    // On Linux: ~/.local/share/app.codeg
-    // On Windows: %APPDATA%/app.codeg
+    // Resolve under the fork-owned platform namespace on every desktop OS.
     #[cfg(target_os = "macos")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| crate::product::platform_data_dir(&d))
     }
     #[cfg(target_os = "linux")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| crate::product::platform_data_dir(&d))
     }
     #[cfg(target_os = "windows")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| crate::product::platform_data_dir(&d))
     }
 }
 
@@ -752,7 +755,7 @@ mod tests {
         let content = std::fs::read_to_string(&script_path).expect("read script");
 
         // Must invoke the embedded binary with both flags so server-mode
-        // deployments don't fall back to the hardcoded `app.codeg` path.
+        // deployments don't fall back to the platform default data path.
         // Paths are sh-single-quoted so spaces / `$` / backticks survive.
         assert!(content.contains("/usr/local/bin/codeg-server"));
         assert!(content.contains("--credential-helper"));

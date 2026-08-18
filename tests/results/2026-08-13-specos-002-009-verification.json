@@ -1,0 +1,162 @@
+{
+  "standardVersion": "specos-test-standard/v1",
+  "qualityProfile": "fullstack-flow",
+  "runId": "2026-08-13-specos-002-009",
+  "date": "2026-08-13",
+  "workspaceCommit": "c33b288f0d8b94432ae91069593fb8d7ee762a3b",
+  "bugrailCommit": "b2b8c7e17a9e14462af5d20125d2bca42d0eff9f",
+  "owners": ["testing-agent", "qa-agent"],
+  "issues": ["045", "047", "049", "051", "053", "055", "058", "060"],
+  "decision": "blocked",
+  "commands": [
+    {
+      "command": "cargo test --features test-utils --test specos_agent_team_context -- --test-threads=1",
+      "cwd": "bugrail/src-tauri",
+      "exitCode": 101,
+      "passed": 32,
+      "failed": 1,
+      "failedNames": ["t05_concurrency_race_cycle"]
+    },
+    {
+      "command": "cargo test --features test-utils --test specos_migration -- --test-threads=1",
+      "cwd": "bugrail/src-tauri",
+      "exitCode": 0,
+      "passed": 4
+    },
+    {
+      "command": "cargo check --features test-utils",
+      "cwd": "bugrail/src-tauri",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm exec vitest run src/components/teams/teams-page.test.tsx src/components/context-system/context-page.test.tsx src/components/tasks/specos/task-traceability-panel.test.tsx src/i18n/messages.test.ts",
+      "cwd": "bugrail",
+      "exitCode": 0,
+      "passed": 24
+    },
+    {
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "bugrail",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm build",
+      "cwd": "bugrail",
+      "exitCode": 0
+    }
+  ],
+  "features": {
+    "BUGRAIL-SPECOS-002": {
+      "issue": "045",
+      "specStatus": "approved",
+      "specHash": "f9342aa89f379719d89fc8bcbcc7e612208652ec42fa9dd464c671185587fee9",
+      "result": "partial",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "pass",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "partial",
+        "T06": "partial"
+      }
+    },
+    "BUGRAIL-SPECOS-003": {
+      "issue": "047",
+      "specStatus": "draft",
+      "specHash": "7dd9483c9193323ffe22b37c4b375056af0a556e6b927d502294373b22657492",
+      "result": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "pass",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "pass",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-004": {
+      "issue": "049",
+      "specStatus": "draft",
+      "specHash": "f22459922841ca0a1136b6337f363753817b1d49c3657e3adbeddc15f8aef775",
+      "result": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "partial",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "fail",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-005": {
+      "issue": "051",
+      "specStatus": "draft",
+      "specHash": "99bb0dc5d494226570962a462e11177fa9c78f92e72bf6f8d3db877629b1d9d9",
+      "result": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "partial",
+        "T03": "missing",
+        "T04": "missing",
+        "T05": "missing",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-006": {
+      "issue": "053",
+      "specStatus": "draft",
+      "specHash": "1769705f83b91b410e8472c70f891b974b7062da0b8fd413fd5a4f138d5e1878",
+      "qaDecision": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "pass",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "pass",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-007": {
+      "issue": "055",
+      "specStatus": "approved",
+      "specHash": "fc10e29a5c2be849a1573875aee7b3fb73f0292dcbfb5e23623c88318f6d669f",
+      "qaDecision": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "partial",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "pass",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-008": {
+      "issue": "058",
+      "specStatus": "approved",
+      "specHash": "244f55f97115b3b067dc7fc031ee55bdf26879f30dcbc3a2d3b5ade24174046d",
+      "qaDecision": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "pass",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "pass",
+        "T06": "pass"
+      }
+    },
+    "BUGRAIL-SPECOS-009": {
+      "issue": "060",
+      "specStatus": "approved",
+      "specHash": "0eb4d34c5db0677a58fafff40c9c963359455ea3d1750d4bb52fc53e707913a7",
+      "qaDecision": "blocked",
+      "scenarios": {
+        "T01": "pass",
+        "T02": "pass",
+        "T03": "pass",
+        "T04": "pass",
+        "T05": "pass",
+        "T06": "partial"
+      }
+    }
+  }
+}
