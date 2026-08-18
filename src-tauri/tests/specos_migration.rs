@@ -85,8 +85,9 @@ async fn down_drops_only_the_specos_tables() {
         .await
         .unwrap();
 
-    // Revert the Agent/Team/Context migration and then this contract migration.
-    Migrator::down(&db.conn, Some(2)).await.expect("down migrations");
+    // Revert the upstream title migration, then the Agent/Team/Context and
+    // contract migrations added by SpecOS.
+    Migrator::down(&db.conn, Some(3)).await.expect("down migrations");
 
     let names = table_names(&db).await;
     assert!(!names.contains(&"work_task_contract".to_string()));

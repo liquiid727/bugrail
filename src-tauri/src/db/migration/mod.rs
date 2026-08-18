@@ -39,6 +39,7 @@ mod m20260807_000001_work_task_scheduled_at;
 mod m20260808_000001_custom_agent_supports_mcp;
 mod m20260809_000001_spec_contract;
 mod m20260812_000001_agent_team_context;
+mod m20260817_000001_work_task_conversation_title;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -84,6 +85,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260808_000001_custom_agent_supports_mcp::Migration),
             Box::new(m20260809_000001_spec_contract::Migration),
             Box::new(m20260812_000001_agent_team_context::Migration),
+            Box::new(m20260817_000001_work_task_conversation_title::Migration),
         ]
     }
 }

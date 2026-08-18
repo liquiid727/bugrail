@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "bugrail"
-version = "0.24.0"
+version = "0.26.1"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol-schema",
@@ -802,6 +802,7 @@ dependencies = [
  "which 7.0.3",
  "windows-sys 0.59.0",
  "zip 2.4.2",
+ "zstd",
 ]
 
 [[package]]
