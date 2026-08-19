@@ -110,7 +110,7 @@ pub struct TeamCatalog {
     pub validation_errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextProviderConfig {
     pub id: String,
@@ -125,6 +125,82 @@ pub struct ContextProviderConfig {
     pub required: bool,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    // ── Memory Provider settings (BUGRAIL-SPECOS-017, `kind = "memory"`) ──
+    // Every field below is ignored for non-memory kinds, so legacy provider
+    // documents deserialize unchanged.
+    /// Adapter key from the static allowlist. MVP01 knows exactly one:
+    /// `tencentdb-agent-memory-v3`.
+    #[serde(default)]
+    pub adapter: Option<String>,
+    /// Name of the environment variable holding the upstream service id
+    /// (`x-tdai-service-id`). The value itself is resolved in the backend at
+    /// call time only; it is never persisted or returned to clients.
+    #[serde(default)]
+    pub service_id_env: Option<String>,
+    /// Project-specific upstream isolation space. Local folder database IDs
+    /// are never used as cross-install identity.
+    #[serde(default)]
+    pub team_id: Option<String>,
+    /// Name of the environment variable holding the upstream user id.
+    #[serde(default)]
+    pub user_id_env: Option<String>,
+    /// Upstream Agent id used when `agent_id_map` has no exact match.
+    #[serde(default)]
+    pub default_agent_id: Option<String>,
+    /// Exact AgentProfile id → upstream Agent id mapping.
+    #[serde(default)]
+    pub agent_id_map: BTreeMap<String, String>,
+    #[serde(default = "default_true")]
+    pub capture_enabled: bool,
+    #[serde(default = "default_true")]
+    pub recall_enabled: bool,
+    /// L1 recall hit limit, bounded 1..=20.
+    #[serde(default = "default_recall_limit")]
+    pub recall_limit: u32,
+    /// Also recall L3 Core memory (`POST /v3/core/read`).
+    #[serde(default)]
+    pub include_core: bool,
+    /// Per-request timeout in milliseconds, bounded 500..=30000.
+    #[serde(default = "default_memory_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Capture cap per message in bytes (default 8 KiB). A message over the
+    /// cap is excluded with an explicit reason, never truncated.
+    #[serde(default = "default_max_capture_message_bytes")]
+    pub max_capture_message_bytes: usize,
+    /// Capture cap per batch in bytes (default 256 KiB).
+    #[serde(default = "default_max_capture_batch_bytes")]
+    pub max_capture_batch_bytes: usize,
+}
+
+/// Manual `Default` mirroring the serde defaults so struct-literal
+/// construction with `..Default::default()` matches what a deserialized
+/// config yields (bounded memory fields get their in-range defaults, not
+/// zero).
+impl Default for ContextProviderConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: String::new(),
+            endpoint: None,
+            secret_env: None,
+            enabled: true,
+            required: false,
+            capabilities: Vec::new(),
+            adapter: None,
+            service_id_env: None,
+            team_id: None,
+            user_id_env: None,
+            default_agent_id: None,
+            agent_id_map: BTreeMap::new(),
+            capture_enabled: true,
+            recall_enabled: true,
+            recall_limit: default_recall_limit(),
+            include_core: false,
+            timeout_ms: default_memory_timeout_ms(),
+            max_capture_message_bytes: default_max_capture_message_bytes(),
+            max_capture_batch_bytes: default_max_capture_batch_bytes(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -392,4 +468,16 @@ fn default_max_bytes() -> usize {
 }
 fn default_max_tokens() -> usize {
     32_000
+}
+fn default_recall_limit() -> u32 {
+    5
+}
+fn default_memory_timeout_ms() -> u64 {
+    5_000
+}
+fn default_max_capture_message_bytes() -> usize {
+    8 * 1024
+}
+fn default_max_capture_batch_bytes() -> usize {
+    256 * 1024
 }

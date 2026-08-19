@@ -5,6 +5,15 @@
 > Scope: Memory / Knowledge / Code Intelligence / Skills / Context Orchestration  
 > Date: 2026-08-12
 
+> 2026-08-18 delivery note: this document remains a broad architecture
+> proposal. The implementable MVP01 contract is
+> `.prd/prd-memory-plugin-mvp01.md` and
+> `.features/BUGRAIL-SPECOS-017-memory-plugin-mvp01/spec.md`. CodeG implements
+> a Memory Plugin module and uses TencentDB Agent Memory v3 as the first Engine;
+> CodeG owns capture, write policy, retrieval, Context injection and UI. Wiki,
+> CodeGraph and Skill Evolution remain independent modules. Earlier local
+> delivery drafts are not part of this implementable contract.
+
 ---
 
 ## 1. 背景

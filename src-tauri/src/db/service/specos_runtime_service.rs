@@ -483,6 +483,7 @@ fn handoff_info(row: work_task_handoff::Model, task: Option<&work_task::Model>) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_team_run<C: ConnectionTrait>(
     conn: &C,
     id: &str,

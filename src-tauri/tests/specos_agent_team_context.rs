@@ -21,6 +21,15 @@ use sea_orm::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Memory service over the same in-memory connection, for context surfaces
+/// that now take `&MemoryService`. These tests never configure a memory
+/// provider, so the service only supplies the production registry plumbing.
+fn test_memory(db: &codeg_lib::db::AppDatabase) -> codeg_lib::memory::MemoryService {
+    codeg_lib::memory::MemoryService::new(codeg_lib::db::AppDatabase {
+        conn: db.conn.clone(),
+    })
+}
+
 fn task(folder_id: i32, title: &str) -> WorkTaskDraft {
     WorkTaskDraft {
         folder_id,
@@ -798,6 +807,7 @@ async fn t01_deterministic_order_hash() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -809,6 +819,7 @@ async fn t01_deterministic_order_hash() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -854,6 +865,7 @@ async fn t02_required_budget_block() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     {
@@ -889,6 +901,7 @@ async fn t03_optional_source_absence() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -919,6 +932,7 @@ async fn t04_path_and_symlink_escape() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     {
@@ -959,6 +973,7 @@ async fn t05_retry_package_isolation() {
         created.id,
         seq1,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -980,6 +995,7 @@ async fn t05_retry_package_isolation() {
         created.id,
         seq2,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1013,6 +1029,7 @@ async fn t06_post_restart_inspection() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1025,6 +1042,7 @@ async fn t06_post_restart_inspection() {
 
 #[tokio::test]
 async fn provider_t01_local_health_and_t03_required_block() {
+    let db = fresh_in_memory_db().await;
     let local = ContextProviderConfig {
         id: "local".into(),
         kind: "local".into(),
@@ -1033,8 +1051,10 @@ async fn provider_t01_local_health_and_t03_required_block() {
         enabled: true,
         required: false,
         capabilities: vec![],
+            ..Default::default()
     };
-    let health = context::check_provider_health(&[local.clone()]).await;
+    let health =
+        context::check_provider_health(std::slice::from_ref(&local), &test_memory(&db), 0).await;
     assert_eq!(health[0].status, "healthy");
 
     let root = tempfile::tempdir().unwrap();
@@ -1051,11 +1071,11 @@ async fn provider_t01_local_health_and_t03_required_block() {
                 enabled: true,
                 required: true,
                 capabilities: vec!["memory".into()],
+                            ..Default::default()
             }],
         ),
     )
     .unwrap();
-    let db = fresh_in_memory_db().await;
     let folder_id = seed_folder(&db, root.path().to_str().unwrap()).await;
     let (task_id, seq) = claim_task(&db.conn, folder_id, "ctx").await;
     let err = match context::prepare_run(
@@ -1066,6 +1086,7 @@ async fn provider_t01_local_health_and_t03_required_block() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     {
@@ -1091,6 +1112,7 @@ async fn provider_t04_optional_degradation() {
                 enabled: true,
                 required: false,
                 capabilities: vec!["memory".into()],
+                            ..Default::default()
             }],
         ),
     )
@@ -1106,6 +1128,7 @@ async fn provider_t04_optional_degradation() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1114,6 +1137,7 @@ async fn provider_t04_optional_degradation() {
 
 #[tokio::test]
 async fn provider_t05_timeout_and_redaction() {
+    let db = fresh_in_memory_db().await;
     let disabled = ContextProviderConfig {
         id: "off".into(),
         kind: "tencent-memory".into(),
@@ -1122,8 +1146,9 @@ async fn provider_t05_timeout_and_redaction() {
         enabled: false,
         required: false,
         capabilities: vec![],
+            ..Default::default()
     };
-    let health = context::check_provider_health(&[disabled]).await;
+    let health = context::check_provider_health(&[disabled], &test_memory(&db), 0).await;
     assert_eq!(health[0].status, "disabled");
     let dumped = serde_json::to_string(&health).unwrap();
     assert!(!dumped.contains("sk-"));
@@ -1139,6 +1164,7 @@ async fn provider_t05_timeout_and_redaction() {
             enabled: false,
             required: true,
             capabilities: vec![],
+                    ..Default::default()
         }],
     );
     let errors = specos_control::validate_context(&invalid).join("; ");
@@ -1202,6 +1228,7 @@ async fn loadout_t01_precedence_and_t06_prompt_order() {
         created.id,
         seq1,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1226,6 +1253,7 @@ async fn loadout_t01_precedence_and_t06_prompt_order() {
         created.id,
         seq2,
         Some("review"),
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1260,6 +1288,7 @@ async fn loadout_t03_dedupe_and_budget() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
@@ -1286,10 +1315,11 @@ async fn inspector_t02_t03_t05_overview_join_and_activity() {
         task_id,
         seq,
         None,
+        &test_memory(&db),
     )
     .await
     .unwrap();
-    let overview = context::overview(&db.conn, folder_id, root.path())
+    let overview = context::overview(&db.conn, folder_id, root.path(), &test_memory(&db))
         .await
         .unwrap();
     assert_eq!(overview.packages.len(), 1);

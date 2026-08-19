@@ -28,6 +28,7 @@ pub mod git_repo;
 pub mod intern;
 pub mod keyring_store;
 pub mod logging;
+pub mod memory;
 pub mod models;
 mod network;
 pub mod office_watch;
@@ -323,6 +324,24 @@ mod tauri_app {
                 ))
                 .map_err(|e| e.to_string())?;
                 app.manage(database);
+
+                // Shared Memory service (BUGRAIL-SPECOS-017): Adapter
+                // registry + health cache + capture outbox. Shared by the
+                // WorkTask engine, the embedded web server's AppState and
+                // the desktop Memory commands.
+                let memory_service =
+                    std::sync::Arc::new(crate::memory::MemoryService::new(
+                        crate::db::AppDatabase {
+                            conn: app.state::<db::AppDatabase>().conn.clone(),
+                        },
+                    ));
+                app.manage(memory_service.clone());
+                // Capture outbox worker for the process lifetime: startup
+                // recovery + reconciliation, then the delivery loop. Capture
+                // never feeds back into WorkTask outcomes.
+                tauri::async_runtime::spawn(crate::memory::capture_worker::run(
+                    memory_service,
+                ));
 
                 // Restore and apply saved system proxy settings before any network operation.
                 let db = app.state::<db::AppDatabase>();
@@ -763,6 +782,9 @@ mod tauri_app {
                     crate::db::AppDatabase {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                     },
+                    app.state::<std::sync::Arc<crate::memory::MemoryService>>()
+                        .inner()
+                        .clone(),
                     app.state::<ConnectionManager>().clone_ref(),
                     crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
                     app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()

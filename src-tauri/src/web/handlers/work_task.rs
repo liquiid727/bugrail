@@ -388,8 +388,7 @@ pub async fn work_task_merge(
         params.message,
         params.delete_worktree,
     )
-        .await
-        .map_err(AppCommandError::from)?;
+    .await?;
     Ok(Json(queued))
 }
 

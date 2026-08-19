@@ -331,10 +331,11 @@ pub async fn context_config_save_core(
 
 pub async fn context_overview_core(
     db: &AppDatabase,
+    memory: &crate::memory::MemoryService,
     folder_id: i32,
 ) -> Result<ContextOverview, DbError> {
     let root = crate::specos_control::project_root(&db.conn, folder_id).await?;
-    crate::context::overview(&db.conn, folder_id, &root).await
+    crate::context::overview(&db.conn, folder_id, &root, memory).await
 }
 
 pub async fn context_package_get_core(
@@ -470,9 +471,10 @@ pub async fn specos_context_config_save(
 #[tauri::command]
 pub async fn specos_context_overview(
     db: tauri::State<'_, AppDatabase>,
+    memory: tauri::State<'_, std::sync::Arc<crate::memory::MemoryService>>,
     folder_id: i32,
 ) -> Result<ContextOverview, DbError> {
-    context_overview_core(&db, folder_id).await
+    context_overview_core(&db, &memory, folder_id).await
 }
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]

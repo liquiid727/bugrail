@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-12
+- Refined by: `ADR-004-memory-plugin-tencentdb-mvp01.md`
 - Sources: `docs/codeg-memory-context-system-spec.md`,
   `.prd/prd-specos-agent-team-context-system.md`
 
@@ -30,9 +31,9 @@ hard to budget, and impossible to reproduce after restart.
 
 - ACP/CLI adapters receive compiled context but do not choose Memory, Wiki,
   Skill, or CodeGraph policy.
-- The first implementation can validate the orchestration seam with local
-  sources and Tencent-compatible health/tool discovery before remote retrieval
-  and write APIs are enabled.
+- The implemented baseline validates local orchestration and Provider health.
+  Feature `BUGRAIL-SPECOS-017` adds remote Memory capture/recall through the
+  separate Memory Plugin interface while preserving this Context authority.
 - Dynamic ranking/compression, ContextFS, semantic CodeGraph, Memory writes,
   Wiki synchronization, and Skill evolution remain independently replaceable
   later slices.

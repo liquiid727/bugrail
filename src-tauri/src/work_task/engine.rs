@@ -70,6 +70,9 @@ pub fn engine() -> Option<Arc<TaskEngine>> {
 
 pub struct TaskEngine {
     db: AppDatabase,
+    /// Shared Memory service (capture outbox + Adapter registry). Capture
+    /// enqueue survives settle and settle never waits on it (SPECOS-017 §5).
+    memory: Arc<crate::memory::MemoryService>,
     manager: ConnectionManager,
     emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
@@ -127,6 +130,7 @@ pub struct TaskEngine {
 /// automation engine: `None` unless this process holds the exclusive task lock.
 pub fn build_task_engine(
     db: AppDatabase,
+    memory: Arc<crate::memory::MemoryService>,
     manager: ConnectionManager,
     emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
@@ -153,6 +157,7 @@ pub fn build_task_engine(
     };
     let engine = Arc::new(TaskEngine {
         db,
+        memory,
         manager,
         emitter,
         bus,
@@ -187,8 +192,12 @@ pub fn new_for_test(db: AppDatabase, emitter: EventEmitter, data_dir: PathBuf) -
         .open(&lock_path)
         .expect("open test engine lock");
     let metrics = Arc::new(crate::acp::EventBusMetrics::default());
+    let memory = Arc::new(crate::memory::MemoryService::new(AppDatabase {
+        conn: db.conn.clone(),
+    }));
     Arc::new(TaskEngine {
         db,
+        memory,
         manager: crate::app_state::default_connection_manager(),
         emitter,
         bus: Arc::new(crate::acp::InternalEventBus::new(metrics)),
@@ -219,8 +228,12 @@ const MAX_DELEGATION_CHAIN_HOPS: usize = 16;
 /// tests feed `on_event` themselves.
 #[cfg(test)]
 fn test_engine(db: AppDatabase) -> Arc<TaskEngine> {
+    let memory = Arc::new(crate::memory::MemoryService::new(AppDatabase {
+        conn: db.conn.clone(),
+    }));
     Arc::new(TaskEngine {
         db,
+        memory,
         manager: ConnectionManager::new(),
         emitter: EventEmitter::Noop,
         bus: Arc::new(InternalEventBus::new(Default::default())),
@@ -1046,6 +1059,7 @@ impl TaskEngine {
                     task_id,
                     run_seq,
                     resolved.context_loadout_id.as_deref(),
+                    &self.memory,
                 )
                 .await
                 .map_err(|e| e.to_string())?,
@@ -1706,28 +1720,26 @@ impl TaskEngine {
             AcpEvent::DelegationStarted {
                 child_connection_id,
                 ..
-            } => {
+            } if self.task_for_connection(&env.connection_id).await.is_some() => {
                 // Scoped to task runs: a delegation from an ordinary chat tab
                 // has no board row to flip, and mapping it would grow this map
                 // for the life of the process. Resolved through
                 // `task_for_connection` rather than `index` alone so a nested
                 // delegation (a sub-agent delegating further) maps to the same
                 // run — its prompts block the task just as much.
-                if self.task_for_connection(&env.connection_id).await.is_some() {
-                    self.delegation_parents
-                        .lock()
-                        .await
-                        .insert(child_connection_id.clone(), env.connection_id.clone());
-                    // The broker starts the child's turn BEFORE announcing it
-                    // (`send_prompt_linked_for_delegation` precedes
-                    // `emit_started_if_real`), so a child that blocks
-                    // immediately raised its prompt while we had no mapping and
-                    // we dropped it. Recover from live state now that we do —
-                    // otherwise the board sits at `running` for a run that is
-                    // already parked on the user.
-                    self.backfill_child_blocking_prompts(child_connection_id)
-                        .await;
-                }
+                self.delegation_parents
+                    .lock()
+                    .await
+                    .insert(child_connection_id.clone(), env.connection_id.clone());
+                // The broker starts the child's turn BEFORE announcing it
+                // (`send_prompt_linked_for_delegation` precedes
+                // `emit_started_if_real`), so a child that blocks
+                // immediately raised its prompt while we had no mapping and
+                // we dropped it. Recover from live state now that we do —
+                // otherwise the board sits at `running` for a run that is
+                // already parked on the user.
+                self.backfill_child_blocking_prompts(child_connection_id)
+                    .await;
             }
             AcpEvent::DelegationCompleted {
                 child_connection_id,
@@ -1933,7 +1945,7 @@ impl TaskEngine {
                         .as_ref()
                         .and_then(|t| t.result_summary.clone())
                         .unwrap_or_else(|| "agent reported the task as blocked".to_string());
-                    work_task_service::fail(
+                    let failed = work_task_service::fail(
                         &self.db.conn,
                         task_id,
                         &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
@@ -1942,7 +1954,11 @@ impl TaskEngine {
                         Some(error),
                     )
                     .await
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                    if failed {
+                        self.spawn_capture_enqueue(task_id, run_seq);
+                    }
+                    failed
                 } else {
                     let own_summary = if verdict.is_some() {
                         task.as_ref().and_then(|t| t.result_summary.clone())
@@ -1961,6 +1977,7 @@ impl TaskEngine {
                     .unwrap_or(false);
                     if settled {
                         self.spawn_post_review(task_id, run_seq);
+                        self.spawn_capture_enqueue(task_id, run_seq);
                     }
                     settled
                 }
@@ -1972,16 +1989,22 @@ impl TaskEngine {
                     .await
                     .unwrap_or(false)
             }
-            other => work_task_service::fail(
-                &self.db.conn,
-                task_id,
-                &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
-                Some(run_seq),
-                "agent_error",
-                Some(format!("agent stopped: {other}")),
-            )
-            .await
-            .unwrap_or(false),
+            other => {
+                let failed = work_task_service::fail(
+                    &self.db.conn,
+                    task_id,
+                    &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+                    Some(run_seq),
+                    "agent_error",
+                    Some(format!("agent stopped: {other}")),
+                )
+                .await
+                .unwrap_or(false);
+                if failed {
+                    self.spawn_capture_enqueue(task_id, run_seq);
+                }
+                failed
+            }
         };
         if changed {
             self.emit_upsert(task_id);
@@ -2105,6 +2128,32 @@ impl TaskEngine {
             engine.run_preflight(task_id, run_seq).await;
             if let Ok(task) = work_task_service::get_model(&engine.db.conn, task_id).await {
                 engine.merge_pump(task.folder_id).await;
+            }
+        });
+    }
+
+    /// Memory capture hook (BUGRAIL-SPECOS-017 §5): after a settle into
+    /// `review` or `failed`, stage the outbox rows for this run generation.
+    /// Runs independently from the settlement transaction — settle never
+    /// waits on it, it never touches the WorkTask row, and its failures only
+    /// log. Eligibility (outcome, durable conversation, complete final
+    /// assistant text, memory providers configured) is re-checked inside.
+    fn spawn_capture_enqueue(self: &Arc<Self>, task_id: i32, run_seq: i32) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            match crate::memory::capture::enqueue_for_run(&engine.db, task_id, run_seq).await {
+                Ok(0) => {}
+                Ok(staged) => tracing::info!(
+                    task_id,
+                    run_seq,
+                    staged,
+                    "[memory] capture enqueued after settle"
+                ),
+                Err(e) => tracing::warn!(
+                    task_id,
+                    run_seq,
+                    "[memory] capture enqueue failed: {e}"
+                ),
             }
         });
     }
@@ -3313,6 +3362,7 @@ impl TaskEngine {
                         // and its auto-merge chance — same hook as the live
                         // settle path.
                         self.spawn_post_review(task.id, task.run_seq);
+                        self.spawn_capture_enqueue(task.id, task.run_seq);
                     }
                     settled
                 }
@@ -3321,16 +3371,22 @@ impl TaskEngine {
                         .await
                         .unwrap_or(false)
                 }
-                _ => work_task_service::fail(
-                    &self.db.conn,
-                    task.id,
-                    &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
-                    Some(task.run_seq),
-                    "interrupted",
-                    Some("task lost its worker".to_string()),
-                )
-                .await
-                .unwrap_or(false),
+                _ => {
+                    let failed = work_task_service::fail(
+                        &self.db.conn,
+                        task.id,
+                        &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+                        Some(task.run_seq),
+                        "interrupted",
+                        Some("task lost its worker".to_string()),
+                    )
+                    .await
+                    .unwrap_or(false);
+                    if failed {
+                        self.spawn_capture_enqueue(task.id, task.run_seq);
+                    }
+                    failed
+                }
             };
             if changed {
                 self.emit_upsert(task.id);

@@ -14,6 +14,11 @@ pub struct Model {
     pub total_bytes: i32,
     #[sea_orm(column_type = "Text")]
     pub provider_status: String,
+    /// JSON evidence for Memory recall candidates (BUGRAIL-SPECOS-017 §6):
+    /// included/excluded status, reason, layer, remote ID, score, query and
+    /// content hashes. `None` for packages compiled without Memory.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub memory_evidence: Option<String>,
     pub created_at: DateTimeUtc,
 }
 

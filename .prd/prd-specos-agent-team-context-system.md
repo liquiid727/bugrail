@@ -4,6 +4,7 @@
 
 - Status: approved implementation baseline
 - Date: 2026-08-12
+- Revised: 2026-08-18 (Memory Plugin MVP01 added as `BUGRAIL-SPECOS-017`)
 - Product: Code: BugRail / CodeG
 - Replaces: `.prd/prd-specos-delivery-control.md` for Features `002-016`
 - Source proposals:
@@ -15,15 +16,18 @@
 
 ## 1. Product Decision
 
-BugRail will add Agent Profiles, Model Profiles, static expert Teams, explicit
-Workflow DAGs, and a CodeG-owned Context control plane on top of its existing
+BugRail adds Agent Profiles, Model Profiles, static expert Teams, explicit
+Workflow DAGs, a CodeG-owned Context control plane and a Memory Plugin module
+on top of its existing
 WorkTask, ACP, Session, Worktree, Skill, SQLite, event, and transport modules.
 
 It will not embed a second multi-agent framework or let a memory vendor own
 prompt composition. A workflow node materializes as a normal WorkTask; an
 Agent execution resolves to the existing ACP adapter; a Context Provider
-contributes assets, while CodeG owns selection, budgets, provenance, injection,
-and the immutable package bound to a run generation.
+contributes assets, while CodeG owns capture policy, selection, budgets,
+provenance, injection, UI and the immutable package bound to a run generation.
+TencentDB Agent Memory is the first Memory Engine Adapter; it does not replace
+Context orchestration or absorb Wiki, CodeGraph and Skill modules.
 
 ## 2. Problems To Solve
 
@@ -35,8 +39,9 @@ and the immutable package bound to a run generation.
   Session, Worktree, context, gate, and outcome facts.
 - Project rules, docs, memory, wiki, code intelligence, and Skills have no
   single loadout, budget, provenance, or failure contract.
-- A remote memory system could become an accidental architectural authority and
-  make runs non-reproducible or silently weaken required context.
+- Remote memory needs a stable plugin seam, strict project/Agent/user identity,
+  delivery evidence and immutable recall provenance; direct Proxy injection
+  would make runs vendor-specific and non-reproducible.
 
 ## 3. Users And Outcomes
 
@@ -84,7 +89,7 @@ delivery. They can:
 | `P-ATC-13` | A loadout selects required/optional project-local sources and Provider capabilities with item, byte, and token budgets. |
 | `P-ATC-14` | Required missing/unhealthy context blocks launch; optional provider failure produces an explicit degraded package and activity record. |
 | `P-ATC-15` | Context paths are canonicalized under the project, deduplicated by content hash, bounded, and stored against exact `task_id/run_seq`. |
-| `P-ATC-16` | TencentDB Agent Memory is the first remote bootstrap target through an adapter-compatible health/tool boundary, not an Agent dependency or architecture owner. |
+| `P-ATC-16` | Memory is a CodeG module behind health/capture/recall; TencentDB Agent Memory v3 is the first Engine Adapter. CodeG owns collection, write policy, retrieval, Context injection and UI. |
 | `P-ATC-17` | Context UI exposes provider health, package contents, hashes, scopes, budgets, and activity, including empty/loading/degraded/blocked/error states. |
 
 ### Governance And Compatibility
@@ -96,6 +101,7 @@ delivery. They can:
 | `P-ATC-20` | Desktop and standalone-server transports expose equivalent command-core behavior. |
 | `P-ATC-21` | Existing `codeg` commands, routes, URI schemes, data files, ACP adapters, and unprofiled tasks remain compatible. |
 | `P-ATC-22` | Runtime correctness is reconstructible from SQLite/Git facts; live events are refresh hints only. |
+| `P-ATC-23` | Wiki, CodeGraph and Skill Evolution remain independent modules that may share Provider identity and ContextItem envelopes without becoming Memory interface methods. |
 
 ## 5. Golden Paths
 
@@ -126,10 +132,22 @@ project Context loadout
   -> expose package and activity after restart
 ```
 
+### 5.3 Memory Plugin MVP01
+
+```text
+settled WorkTask conversation
+  -> filtered, bounded capture delivery
+  -> TencentDB v3 L0 write
+  -> later task L1/L3 recall
+  -> existing Context budget/dedup/provenance
+  -> immutable run package
+  -> ACP prompt dispatch
+```
+
 ## 6. Feature Sequence And Renumbering
 
 `BUGRAIL-SPECOS-001` is preserved as the existing WorkTask contract/gate slice.
-Historical Features `002-010` move as follows:
+The 2026-08-12 migration remains historical context:
 
 | Previous | Replacement |
 |---|---|
@@ -137,11 +155,6 @@ Historical Features `002-010` move as follows:
 | `003` WorkTask Dependencies | `004` |
 | `004` Integration/Handoff | `005` |
 | `005` Deterministic Context Pack | `006` |
-| `006` Repository Impact | `010` |
-| `007` Explainable Routing | `011` |
-| `008` Run Evaluation | `012` |
-| `009` Project Memory | `013` |
-| `010` Controlled Skills | `014` Skill Experience Lifecycle |
 
 New slices are:
 
@@ -153,6 +166,7 @@ New slices are:
 | `009` Context Activity And Inspector | Context navigation, health, packages, provenance, and errors |
 | `015` Static Team Workflow | Team/workflow catalogs, DAG materialization, and bounded scheduling |
 | `016` Team Operations And Handoff | Team run controls, node inspection, structured handoff, and parity |
+| `017` Memory Plugin MVP01 | TencentDB v3 capture, recall, Context injection and BugRail UI |
 
 ## 7. UX Contract
 
@@ -165,6 +179,8 @@ New slices are:
 - Context Overview shows Provider health and recent packages/activity. Task
   Detail links the exact package, run snapshot, dependencies, contract/gates,
   and handoff.
+- Memory Provider state, capture delivery and recall provenance are shown in
+  BugRail Context UI; upstream MemoryPanel is not embedded.
 - Last successfully loaded persisted data remains visible with an explicit
   degraded/error banner during transient transport failure.
 - Keyboard access, focus visibility, responsive narrow layouts, and all ten
@@ -178,6 +194,9 @@ New slices are:
   Team runs/node bindings, immutable Context Packages/items, and activity.
 - Profile config accepts allowlisted identifiers. Provider credentials are
   environment/keychain references and are redacted from persisted snapshots.
+- Memory identity uses explicit upstream Team/Agent/User bindings. Capture
+  delivery receipts are runtime facts; remote Memory content is not mirrored
+  as a second local memory database.
 - Context source canonicalization rejects project escape and unsafe symlinks;
   budgets and UTF-8/file policies are enforced before persistence or prompt use.
 - A required source/provider error is fail-closed. Optional failures are
@@ -189,10 +208,10 @@ New slices are:
 - Dynamic autonomous team creation, supervisor loops, Agent-as-Tool, automatic
   model brokerage, or unbounded delegation in the first release.
 - Rebuilding ACP/CLI adapters or bypassing them with direct Provider calls.
-- Shipping TencentDB services inside the desktop application or treating its
-  MemoryPanel as the CodeG Context UI.
-- Full ContextFS, semantic CodeGraph, vector ranking, Wiki regeneration, or
-  automatic Memory/Skill promotion in the bootstrap release.
+- Shipping TencentDB services inside the desktop application, routing ACP/CLI
+  traffic through MemoryProxy, or treating MemoryPanel as BugRail Context UI.
+- Wiki, CodeGraph, Skill Evolution, full ContextFS, automatic cross-project
+  sharing or automatic Memory/Skill promotion in MVP01.
 
 ## 10. Success And Release Gates
 
@@ -205,5 +224,8 @@ New slices are:
   health/activity history, and handoffs from persisted/configured facts.
 - Required context failure blocks before prompt dispatch; optional failure is
   visible and reproducible.
+- One settled run can be captured into TencentDB and recalled by a later run as
+  a hash/provenance-bound Context item without exposing credentials or excluded
+  transcript content.
 - Legacy WorkTask, ACP, transport, migration, TypeScript, UI, and locale tests
   remain green; new Feature/Test Specs provide independent acceptance evidence.

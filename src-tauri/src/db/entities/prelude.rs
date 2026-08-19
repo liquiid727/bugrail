@@ -13,6 +13,7 @@ pub use super::custom_agent::Entity as CustomAgent;
 pub use super::folder::Entity as Folder;
 pub use super::folder_command::Entity as FolderCommand;
 pub use super::folder_link::Entity as FolderLink;
+pub use super::memory_capture_delivery::Entity as MemoryCaptureDelivery;
 pub use super::model_provider::Entity as ModelProvider;
 pub use super::opened_tab::Entity as OpenedTab;
 pub use super::quick_message::Entity as QuickMessage;

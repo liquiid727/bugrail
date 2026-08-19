@@ -29,6 +29,7 @@ pub struct PreparedContext {
     pub prompt: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_run(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -37,6 +38,7 @@ pub async fn prepare_run(
     task_id: i32,
     run_seq: i32,
     requested_loadout: Option<&str>,
+    memory: &crate::memory::MemoryService,
 ) -> Result<PreparedContext, DbError> {
     if let Some(existing) = package_for_run(conn, task_id, run_seq).await? {
         return Ok(PreparedContext {
@@ -64,7 +66,7 @@ pub async fn prepare_run(
         .filter(|p| selected.contains(&p.id))
         .cloned()
         .collect::<Vec<_>>();
-    let health = check_provider_health(&selected_providers).await;
+    let health = check_provider_health(&selected_providers, memory, folder_id).await;
     for provider in config
         .providers
         .iter()
@@ -190,6 +192,7 @@ pub async fn prepare_run(
         estimated_tokens: Set(estimated_tokens as i32),
         total_bytes: Set(total as i32),
         provider_status: Set(provider_status.to_string()),
+        memory_evidence: NotSet,
         created_at: Set(now),
     }
     .insert(&txn)
@@ -326,9 +329,10 @@ pub async fn overview(
     conn: &DatabaseConnection,
     folder_id: i32,
     root: &Path,
+    memory: &crate::memory::MemoryService,
 ) -> Result<ContextOverview, DbError> {
     let config = crate::specos_control::load_context(root)?;
-    let provider_health = check_provider_health(&config.providers).await;
+    let provider_health = check_provider_health(&config.providers, memory, folder_id).await;
     let rows = work_task_context_pack::Entity::find()
         .inner_join(work_task::Entity)
         .filter(work_task::Column::FolderId.eq(folder_id))
@@ -358,11 +362,20 @@ pub async fn overview(
     })
 }
 
+/// Provider health gate. Memory providers delegate to the Memory module
+/// (`GET /health` on the pinned Adapter plus the version/writability gate,
+/// shared 30s cache). Other non-local providers are probed with the public
+/// MemoryCore-style `GET /health` — `GET /v3/tools/list` was never a health
+/// probe: it belongs to the Knowledge service and is a POST there
+/// (issue-054).
 pub async fn check_provider_health(
     providers: &[ContextProviderConfig],
+    memory: &crate::memory::MemoryService,
+    folder_id: i32,
 ) -> Vec<ContextProviderHealth> {
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok();
     let mut out = Vec::new();
@@ -388,6 +401,10 @@ pub async fn check_provider_health(
             });
             continue;
         }
+        if provider.kind == crate::memory::MEMORY_KIND {
+            out.push(memory.provider_health(folder_id, provider, false).await);
+            continue;
+        }
         let Some(endpoint) = provider.endpoint.as_deref() else {
             out.push(ContextProviderHealth {
                 id: provider.id.clone(),
@@ -408,7 +425,7 @@ pub async fn check_provider_health(
             });
             continue;
         };
-        let url = format!("{}/v3/tools/list", endpoint.trim_end_matches('/'));
+        let url = format!("{}/health", endpoint.trim_end_matches('/'));
         let mut request = client.get(url);
         if let Some(env_name) = &provider.secret_env {
             if let Ok(secret) = std::env::var(env_name) {
@@ -456,7 +473,10 @@ fn render_prompt(package: &ContextPackageInfo) -> String {
     out
 }
 
-async fn record_activity(
+/// Context Activity row shared by the Context plane and the Memory capture
+/// worker. Messages must stay safe: IDs, counts and error classes only —
+/// never payload content or credentials (BUGRAIL-SPECOS-017 §9).
+pub async fn record_activity(
     conn: &DatabaseConnection,
     folder_id: i32,
     package_id: Option<&str>,

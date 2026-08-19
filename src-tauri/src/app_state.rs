@@ -15,6 +15,10 @@ use crate::workspace_transfer::WorkspaceTransferManager;
 
 pub struct AppState {
     pub db: AppDatabase,
+    /// Shared Memory service (BUGRAIL-SPECOS-017): Adapter registry, health
+    /// cache and capture outbox. Same instance the WorkTask engine uses, so
+    /// HTTP/Tauri commands and run settlement share one delivery table view.
+    pub memory_service: Arc<crate::memory::MemoryService>,
     pub connection_manager: ConnectionManager,
     pub terminal_manager: TerminalManager,
     pub event_broadcaster: Arc<WebEventBroadcaster>,
@@ -222,8 +226,13 @@ impl AppState {
             chat_authoring_config,
         ) = build_delegation_stack(&connection_manager, db.conn.clone(), data_dir.clone());
 
+        let memory_service = Arc::new(crate::memory::MemoryService::new(AppDatabase {
+            conn: db.conn.clone(),
+        }));
+
         Self {
             db,
+            memory_service,
             connection_manager,
             terminal_manager: default_terminal_manager(),
             event_broadcaster: broadcaster,

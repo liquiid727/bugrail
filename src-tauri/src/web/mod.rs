@@ -766,6 +766,12 @@ pub(crate) async fn do_start_web_server_tauri(
         db: crate::db::AppDatabase {
             conn: app.state::<crate::db::AppDatabase>().conn.clone(),
         },
+        // Reuse the same MemoryService instance the Tauri setup managed, so
+        // HTTP commands and the WorkTask engine share one delivery table view.
+        memory_service: app
+            .state::<Arc<crate::memory::MemoryService>>()
+            .inner()
+            .clone(),
         connection_manager: (*app.state::<crate::acp::manager::ConnectionManager>()).clone_ref(),
         terminal_manager: (*app.state::<crate::terminal::manager::TerminalManager>()).clone_ref(),
         event_broadcaster: app

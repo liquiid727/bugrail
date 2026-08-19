@@ -253,15 +253,10 @@ do not change.
 | Feature | Placement decision |
 |---|---|
 | `BUGRAIL-SPECOS-001` | WorkTask Spec contract and trusted preflight/human gate producers. |
-| `BUGRAIL-SPECOS-002` | WorkTask run records plus projections over existing events, Conversations, token use, gates, and Git. |
-| `BUGRAIL-SPECOS-003` | Dependencies and readiness inside the WorkTask scheduler; no DAG state machine. |
-| `BUGRAIL-SPECOS-004` | Integration as a typed WorkTask using existing ACP and Worktrees. |
-| `BUGRAIL-SPECOS-005` | Deterministic Context Pack inside WorkTask prompt composition. |
-| `BUGRAIL-SPECOS-006` | Bounded local repository-impact snapshot with Rust and TypeScript internal adapters. |
-| `BUGRAIL-SPECOS-007` | Deterministic policy over existing ACP/agent/provider registries. |
-| `BUGRAIL-SPECOS-008` | Read-only evaluation projection over durable run evidence. |
-| `BUGRAIL-SPECOS-009` | SQLite memory candidates; accepted project memory is Git-tracked Markdown. |
-| `BUGRAIL-SPECOS-010` | Governance in front of existing ACP Skill storage and refresh behavior. |
+| `BUGRAIL-SPECOS-002-009` | Agent profiles, run/dependency/handoff evidence and the existing Context control-plane baseline. |
+| `BUGRAIL-SPECOS-015-016` | Static Team workflow and operations over ordinary WorkTasks. |
+| `BUGRAIL-SPECOS-017` | Memory Plugin seam, TencentDB v3 Adapter, capture/recall and immutable Context injection. |
 
-The Feature Specs own their exact schemas and behavior. Later concepts are not
-registered as empty plugins before their implementing Feature.
+Retired draft IDs `010-014` are not implementation authority. Memory, Wiki,
+CodeGraph and Skill Evolution keep separate module interfaces even when one
+external deployment supplies several capabilities.

@@ -3,11 +3,12 @@
 ## Requirement Source
 
 - `.prd/prd-specos-agent-team-context-system.md` — current product baseline.
+- `.prd/prd-memory-plugin-mvp01.md` — current Memory Plugin MVP01 baseline.
 - `docs/codeg-agent-team-orchestration-spec.md` — approved source proposal for
   profiles, Teams, Workflows, runtime resolution, DAGs, and controls.
 - `docs/codeg-memory-context-system-spec.md` — approved source proposal for the
   CodeG-owned Context control plane and TencentDB bootstrap boundary.
-- `design/specos-control-plane-design.md` and ADRs `001-003` — code placement
+- `design/specos-control-plane-design.md` and ADRs `001-004` — code placement
   and architecture decisions.
 - `design/specos-client-interaction-design.md` — shared UI and state contract.
 
@@ -24,21 +25,17 @@
 | 7 | `BUGRAIL-SPECOS-007` Context Provider Bootstrap | implementation baseline | 006 | Provider health and TencentDB boundary |
 | 8 | `BUGRAIL-SPECOS-008` Agent Context Loadouts | implementation baseline | 002,006-007 | Agent-scoped required/optional context |
 | 9 | `BUGRAIL-SPECOS-009` Context Activity And Inspector | implementation baseline | 006-008 | Context route, packages and provenance |
-| 10 | `BUGRAIL-SPECOS-010` Repository Impact Snapshot | draft | 006 | Bounded repository relationship context |
-| 11 | `BUGRAIL-SPECOS-011` Explainable Routing | draft | 003,006 | Policy-scored Agent/model routing |
-| 12 | `BUGRAIL-SPECOS-012` Run Evaluation Projection | draft | 003,011 | Qualified outcome comparison |
-| 13 | `BUGRAIL-SPECOS-013` Project Memory Candidates | draft | 006,012 | Reviewable Git-tracked memory |
-| 14 | `BUGRAIL-SPECOS-014` Skill Experience Lifecycle | draft | 012-013 | Experience-to-Skill governance |
 | 15 | `BUGRAIL-SPECOS-015` Static Team Workflow | implementation baseline | 002-004,008 | Static Team DAG execution |
 | 16 | `BUGRAIL-SPECOS-016` Team Operations And Handoff | implementation baseline | 005,009,015 | Team controls, node trace and handoff |
+| 17 | `BUGRAIL-SPECOS-017` Memory Plugin MVP01 | draft | 003,006-009 | TencentDB v3 capture, recall, Context injection and UI |
 
 ## Migration Notes
 
 - `BUGRAIL-SPECOS-001` remains the original accepted slice and is not
   renumbered or rewritten.
-- Previous Features `002-010` were moved to `003-006` and `010-014` according
-  to the table in the current PRD. Their old Issues `006-042` are retained as
-  historical planning records and marked superseded/stale; replacement Issues
+- Previous Features `002-005` were moved to `003-006` according to the table in
+  the current PRD. Their old Issues `006-021` are retained as historical
+  planning records and marked superseded/stale; replacement Issues
   start at `043` so no Issue identity is reused.
 - Feature Specs `002-009` carry matching Test Specs. A code change can be
   implemented without claiming independent verification until its Test Spec
@@ -52,5 +49,6 @@
   provenance, injection, and observability.
 - Live events trigger refresh only. SQLite, Git, and validated `.codeg/*.yaml`
   are the reconstructible truth.
-- Dynamic orchestration, Agent-as-Tool, autonomous Memory/Skill promotion,
-  full ContextFS, and semantic CodeGraph remain later work.
+- Memory, Wiki, CodeGraph and Skill Evolution use separate module interfaces.
+  Feature `017` covers Memory only; dynamic orchestration, Agent-as-Tool, full
+  ContextFS and autonomous promotion remain later work.

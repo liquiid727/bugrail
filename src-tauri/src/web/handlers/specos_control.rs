@@ -136,7 +136,9 @@ pub async fn context_overview(
     Extension(s): Extension<Arc<AppState>>,
     Json(p): Json<FolderParams>,
 ) -> Result<Json<ContextOverview>, AppCommandError> {
-    Ok(Json(core::context_overview_core(&s.db, p.folder_id).await?))
+    Ok(Json(
+        core::context_overview_core(&s.db, &s.memory_service, p.folder_id).await?,
+    ))
 }
 pub async fn context_package_get(
     Extension(s): Extension<Arc<AppState>>,

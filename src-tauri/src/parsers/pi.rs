@@ -300,15 +300,13 @@ fn parse_session(path: &Path) -> SessionParse {
                         .map(String::from);
                 }
             }
-            "session_info" => {
-                if sp.session_name.is_none() {
-                    sp.session_name = value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(String::from);
-                }
+            "session_info" if sp.session_name.is_none() => {
+                sp.session_name = value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
             }
             "model_change" => {
                 if let Some(model) = value

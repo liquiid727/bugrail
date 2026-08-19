@@ -34,11 +34,12 @@ pub fn resolve(
             .or(profile.model_profile_id.as_ref());
         let model_profile =
             model_id.and_then(|mid| catalog.model_profiles.iter().find(|m| m.id == *mid));
-        if model_id.is_some() && model_profile.is_none() {
-            return Err(DbError::Validation(format!(
-                "model profile '{}' is missing",
-                model_id.expect("checked")
-            )));
+        if let Some(model_id) = model_id {
+            if model_profile.is_none() {
+                return Err(DbError::Validation(format!(
+                    "model profile '{model_id}' is missing"
+                )));
+            }
         }
         let mut config_values = profile.config_values.clone();
         for (key, value) in &cfg.config_values {

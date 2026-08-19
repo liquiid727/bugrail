@@ -270,8 +270,17 @@ async fn async_main() -> ExitCode {
         db.conn.clone(),
         data_dir.clone(),
     );
+    // Shared Memory service (BUGRAIL-SPECOS-017): Adapter registry + health
+    // cache + capture outbox, shared by HTTP handlers and the WorkTask
+    // engine. Mirrors the desktop wiring in `lib.rs`.
+    let memory_service = Arc::new(codeg_lib::memory::MemoryService::new(
+        codeg_lib::db::AppDatabase {
+            conn: db.conn.clone(),
+        },
+    ));
     let state = Arc::new(AppState {
         db,
+        memory_service: memory_service.clone(),
         connection_manager,
         terminal_manager: codeg_lib::app_state::default_terminal_manager(),
         event_broadcaster: broadcaster,
@@ -300,6 +309,12 @@ async fn async_main() -> ExitCode {
     if let Some(hub) = codeg_lib::logging::hub::log_hub() {
         hub.set_emitter(state.emitter.clone());
     }
+
+    // Memory capture outbox worker (BUGRAIL-SPECOS-017 §5): startup
+    // recovery + reconciliation, then the delivery loop. Mirrors the
+    // desktop wiring in `lib.rs`; capture never feeds back into WorkTask
+    // outcomes.
+    codeg_lib::memory::capture_worker::spawn(memory_service.clone());
 
     // Apply persisted delegation settings (depth, enabled) before
     // the listener starts accepting so even the first companion request
@@ -498,6 +513,7 @@ async fn async_main() -> ExitCode {
         codeg_lib::db::AppDatabase {
             conn: state.db.conn.clone(),
         },
+        memory_service.clone(),
         state.connection_manager.clone_ref(),
         state.emitter.clone(),
         state.acp_event_bus.clone(),

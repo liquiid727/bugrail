@@ -385,6 +385,18 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
                 errors.push(format!("context provider '{}' secretEnv must be an uppercase environment variable name", provider.id));
             }
         }
+        // Typed Memory Provider rules (BUGRAIL-SPECOS-017 §3). Non-memory
+        // providers keep the legacy behavior above and ignore the Memory
+        // fields entirely.
+        if provider.kind == crate::memory::MEMORY_KIND {
+            errors.extend(crate::memory::config::validate_memory_provider(provider));
+        } else if provider.adapter.is_some() {
+            errors.push(format!(
+                "context provider '{}' adapter is only valid for kind '{}'",
+                provider.id,
+                crate::memory::MEMORY_KIND
+            ));
+        }
     }
     for loadout in &value.loadouts {
         if loadout.max_items == 0 || loadout.max_items > 64 {

@@ -2,13 +2,13 @@
 
 ## Meta
 
-- Date: `2026-08-12`
+- Date: `2026-08-18`
 - PRD: `.prd/prd-specos-agent-team-context-system.md`
 - Source proposals: `docs/codeg-agent-team-orchestration-spec.md`,
   `docs/codeg-memory-context-system-spec.md`
-- Decisions: ADR `001-003`
-- Features: `BUGRAIL-SPECOS-001` through `016`
-- Current implementation Issues: `001-005`, `043-076`
+- Decisions: ADR `001-004`
+- Active Features: `BUGRAIL-SPECOS-001-009`, `015-017`
+- Current implementation Issues: `001-005`, `043-060`, `071-081`
 - Release posture: implemented foundations, independent verification pending
 
 ## Implemented Baseline
@@ -34,19 +34,20 @@
 
 ## Deliberate Boundaries
 
-- TencentDB remote retrieval/write is not claimed yet; the bootstrap implements
-  its Provider health/tool-discovery boundary and preserves replacementability.
+- TencentDB remote retrieval/write is not part of the implemented baseline.
+  Draft Feature `017` now defines direct v3 Gateway capture/recall behind a
+  Memory Plugin Adapter while preserving Context Package authority.
 - Static configured DAGs are supported. Dynamic planner DAGs, supervisor loops,
   Agent-as-Tool and autonomous delegation remain outside this slice.
-- Model fallback IDs are configuration metadata; automated fallback execution
-  and policy scoring remain `BUGRAIL-SPECOS-011`.
-- Repository impact, evaluation, Memory promotion and Skill evolution remain
-  planned Features `010-014`.
+- Model fallback IDs remain configuration metadata; automatic routing is not an
+  active Feature.
 
 ## Verification Gate
 
 Before release, execute Test Specs `001-009` and Issues `005`, `045`, `047`,
-`049`, `051`, `053`, `055`, `058`, `060`, `073`, and `076`. Record migration
+`049`, `051`, `053`, `055`, `058`, `060`, `073`, and `076`. Feature `017`
+requires its own Test Spec and Issue `081` evidence before implementation can
+be called verified. Record migration
 up/down and legacy fixtures, Rust tests/check, command-core/Tauri/Axum parity,
 frontend unit tests, TypeScript check, production build, responsive/keyboard
 states, all locale catalogs, restart/concurrency, required-context failure, and

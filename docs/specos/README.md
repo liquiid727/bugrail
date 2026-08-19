@@ -16,28 +16,35 @@ Naming and path rules are defined by
 `../../rules/specos-artifact-conventions.md`; artifact directories are declared
 in `../../.specos/manifest.yaml`.
 
-## Current Slice
+## Current Delivery Posture
 
-`BUGRAIL-SPECOS-001` adds Spec references and evidence-backed quality gates to
-the existing CodeG-derived WorkTask flow. It extends the current Rust WorkTask
-engine, SeaORM persistence, Tauri/Axum commands, and Tasks UI. It does not add a
-parallel workflow engine, event bus, artifact database, or agent runtime.
+Features `001-009` and `015-016` have implementation baselines with independent
+verification still pending. Feature `017` is the active Memory Plugin MVP01
+draft.
 
 ## Formal Product And Feature Specs
 
-- Product PRD: `../../.prd/prd-specos-delivery-control.md`
+- Product PRD: `../../.prd/prd-specos-agent-team-context-system.md`
+- Memory MVP01 PRD: `../../.prd/prd-memory-plugin-mvp01.md`
 - Delivery order: `../../.features/roadmap.md`
 - Client interaction standard: `../../design/specos-client-interaction-design.md`
-- Implementable Feature Specs: `../../.features/BUGRAIL-SPECOS-001-*` through
-  `../../.features/BUGRAIL-SPECOS-010-*`
+- Active Feature Specs: `001-009`, `015-017` under `../../.features/`
 
-The ten Specs are vertical CodeG-extension slices and their draft delivery
-Issues are indexed at `../../.issues/README.md`. Only `BUGRAIL-SPECOS-001`
-currently has its matching Test Spec, so later groups remain dependency-planned
-backlog rather than implementation authorization.
+Delivery Issues are indexed at `../../.issues/README.md`. Draft Feature `017`
+is not implementation authority until its PRD/Spec/Test Spec are reviewed and
+approved.
 
 ## Design Exploration
 
 `rfcs/control-plane-v0/` contains the earlier broad control-plane decomposition.
 Its concepts may inform later Feature Specs, but its module contracts and
 backlog are not authoritative.
+
+## Research And Upstream Contracts
+
+- `research/tencentdb-agent-memory-mvp01.md`: integration research baseline for
+  the Memory Plugin (Feature `017`).
+- `upstream/tencentdb-agent-memory-patch-contract.md`: frozen
+  `v2.0.0+bugrail.1` upstream patch contract (pinned commit, replay/upsert
+  semantics, version detection via `/health`).
+
