@@ -10,11 +10,23 @@ import {
   RefreshCw,
   Save,
   ShieldAlert,
+  Waypoints,
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { specosContextConfigSave, specosContextOverview } from "@/lib/api"
+import {
+  codeIntelligenceGetState,
+  codeIntelligenceInstall,
+  codeIntelligenceOpenGraph,
+  codeIntelligenceReindex,
+  codeIntelligenceSetBinaryOverride,
+  codeIntelligenceSetEnabled,
+  specosContextConfigSave,
+  specosContextOverview,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
 import type {
+  CodeIntelState,
   ContextLoadout,
   ContextOverview,
   ContextProviderConfig,
@@ -31,6 +43,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -199,6 +212,7 @@ export function ContextPage() {
       <Tabs defaultValue="overview" className="min-h-0 flex-1 p-4 md:p-6">
         <TabsList>
           <TabsTrigger value="overview">{t("overview")}</TabsTrigger>
+          <TabsTrigger value="codebase">{t("codebase.title")}</TabsTrigger>
           <TabsTrigger value="providers">{t("providers")}</TabsTrigger>
           <TabsTrigger value="loadouts">{t("loadouts")}</TabsTrigger>
           <TabsTrigger value="activity">{t("activity")}</TabsTrigger>
@@ -252,6 +266,9 @@ export function ContextPage() {
               ))
             )}
           </div>
+        </TabsContent>
+        <TabsContent value="codebase" className="min-h-0 overflow-auto pt-3">
+          <CodebaseSection folderId={activeFolderId} />
         </TabsContent>
         <TabsContent value="providers" className="min-h-0 overflow-auto pt-3">
           <div className="mb-3 flex justify-end gap-2">
@@ -478,6 +495,272 @@ export function ContextPage() {
       </Tabs>
     </div>
   )
+}
+
+function CodebaseSection({ folderId }: { folderId: number }) {
+  const t = useTranslations("ContextSystem.codebase")
+  const [state, setState] = useState<CodeIntelState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [overridePath, setOverridePath] = useState("")
+  // The upstream Graph UI runs on the backend host's loopback — only a
+  // pure-desktop window can reach it (server mode and remote-desktop
+  // windows are refused / would point at the wrong machine).
+  const graphAvailable = isDesktop() && !isRemoteDesktopMode()
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setState(await codeIntelligenceGetState(folderId))
+    } catch (cause) {
+      toast.error(toErrorMessage(cause))
+    } finally {
+      setLoading(false)
+    }
+  }, [folderId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const run = async (action: string, op: () => Promise<unknown>) => {
+    setBusy(action)
+    try {
+      const result = await op()
+      if (result && typeof result === "object" && "project" in result) {
+        setState(result as CodeIntelState)
+      } else {
+        await load()
+      }
+    } catch (cause) {
+      toast.error(toErrorMessage(cause))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (loading)
+    return (
+      <div className="space-y-4" aria-busy="true">
+        <Skeleton className="h-32 rounded-2xl" />
+        <Skeleton className="h-32 rounded-2xl" />
+      </div>
+    )
+  if (!state || !state.runtimeAvailable)
+    return (
+      <Empty title={t("unavailable")} body={t("unavailableHint")} compact />
+    )
+
+  const { install, project, records } = state
+  const busySpinner = (action: string) =>
+    busy === action ? <Loader2 className="animate-spin" /> : null
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>{t("adapterTitle")}</CardTitle>
+          <CardDescription>{t("adapterHint")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge variant={install?.installed ? "secondary" : "outline"}>
+              {install?.installed
+                ? `${install.reportedVersion ?? "?"} (${t(
+                    `source.${install.source ?? "managed"}`
+                  )})`
+                : t("notInstalled")}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {t("pinned", { version: install?.pinnedVersion ?? "?" })}
+            </span>
+          </div>
+          {install?.binaryPath ? (
+            <p className="break-all text-xs text-muted-foreground">
+              {install.binaryPath}
+            </p>
+          ) : null}
+          {!install?.installed ? (
+            <Button
+              size="sm"
+              disabled={busy != null}
+              onClick={() => void run("install", codeIntelligenceInstall)}
+            >
+              {busySpinner("install")}
+              {t("install")}
+            </Button>
+          ) : null}
+          <div className="space-y-1 border-t pt-3">
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              {t("overrideLabel")}
+              <Input
+                value={overridePath}
+                placeholder={t("overridePlaceholder")}
+                onChange={(event) => setOverridePath(event.target.value)}
+              />
+            </label>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy != null}
+                onClick={() =>
+                  void run("override", () =>
+                    codeIntelligenceSetBinaryOverride(overridePath || null)
+                  )
+                }
+              >
+                {busySpinner("override")}
+                {t("overrideApply")}
+              </Button>
+              {install?.source !== "managed" && install?.source != null ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy != null}
+                  onClick={() =>
+                    void run("override-clear", () =>
+                      codeIntelligenceSetBinaryOverride(null)
+                    )
+                  }
+                >
+                  {busySpinner("override-clear")}
+                  {t("overrideClear")}
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">{t("overrideHint")}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-2">
+            {t("indexTitle")}
+            <Switch
+              checked={project.bound && project.enabled}
+              disabled={busy != null || !install?.installed}
+              onCheckedChange={(checked) =>
+                void run("toggle", () =>
+                  codeIntelligenceSetEnabled(folderId, checked)
+                )
+              }
+              aria-label={t("indexTitle")}
+            />
+          </CardTitle>
+          <CardDescription>{t("indexHint")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant={
+                project.phase === "ready"
+                  ? "secondary"
+                  : project.phase === "not_indexed"
+                    ? "outline"
+                    : "destructive"
+              }
+            >
+              {phaseLabel(t, project.phase)}
+            </Badge>
+            {project.revision ? (
+              <span className="font-mono text-xs text-muted-foreground">
+                {project.revision.slice(0, 12)}
+              </span>
+            ) : null}
+            {project.fileCount != null ? (
+              <span className="text-xs text-muted-foreground">
+                {t("fileCount", { count: project.fileCount })}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy != null || !project.bound || !project.enabled}
+              onClick={() =>
+                void run("reindex", () => codeIntelligenceReindex(folderId))
+              }
+            >
+              {busySpinner("reindex") ?? <RefreshCw />}
+              {t("reindex")}
+            </Button>
+            {graphAvailable ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy != null || !project.bound || !project.enabled}
+                onClick={() =>
+                  void run("graph", async () => {
+                    const url = await codeIntelligenceOpenGraph()
+                    toast.success(t("graphOpened", { url }))
+                  })
+                }
+              >
+                {busySpinner("graph") ?? <Waypoints />}
+                {t("openGraph")}
+              </Button>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card size="sm" className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle>{t("recordsTitle")}</CardTitle>
+          <CardDescription>{t("recordsHint")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {records.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("noRecords")}</p>
+          ) : (
+            <ul className="space-y-2">
+              {records.map((record) => (
+                <li
+                  key={record.repoPath}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs">
+                      {record.repoPath}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {record.worktree
+                        ? t("worktreeRecord", { taskId: record.taskId ?? "?" })
+                        : t("baseRecord")}
+                    </div>
+                  </div>
+                  <Badge variant={record.enabled ? "secondary" : "outline"}>
+                    {record.enabled ? t("enabledBadge") : t("disabledBadge")}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+type PhaseKey =
+  | "phase.ready"
+  | "phase.indexing"
+  | "phase.not_indexed"
+  | "phase.unknown"
+
+const KNOWN_PHASES: Record<string, PhaseKey> = {
+  ready: "phase.ready",
+  indexing: "phase.indexing",
+  not_indexed: "phase.not_indexed",
+  unknown: "phase.unknown",
+}
+
+function phaseLabel(t: (key: PhaseKey) => string, phase: string): string {
+  const key = KNOWN_PHASES[phase]
+  return key ? t(key) : phase
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

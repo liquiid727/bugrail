@@ -29,6 +29,31 @@ pub struct PreparedContext {
     pub prompt: String,
 }
 
+/// An engine-computed extra Context Pack item (currently: the Code
+/// Intelligence snapshot for agents that cannot query the index live via
+/// MCP). Appended after the loadout's file sources; budget-aware — an item
+/// that doesn't fit the loadout's remaining byte/token budget is skipped
+/// rather than failing the run (a degraded snapshot never blocks work).
+pub struct EngineContextItem {
+    pub kind: String,
+    pub source: String,
+    pub title: String,
+    pub content: String,
+    pub provenance: serde_json::Value,
+}
+
+/// One collected Context Pack item, pre-insertion. Local loadout sources and
+/// engine-computed extras (Code Intelligence snapshots) share this shape so
+/// the package hash and the DB insert stay uniform.
+struct PackCandidate {
+    kind: String,
+    source: String,
+    title: String,
+    content: String,
+    hash: String,
+    required: bool,
+    provenance: serde_json::Value,
+}
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_run(
     conn: &DatabaseConnection,
@@ -38,6 +63,7 @@ pub async fn prepare_run(
     task_id: i32,
     run_seq: i32,
     requested_loadout: Option<&str>,
+    engine_items: Vec<EngineContextItem>,
     memory: &crate::memory::MemoryService,
 ) -> Result<PreparedContext, DbError> {
     if let Some(existing) = package_for_run(conn, task_id, run_seq).await? {
@@ -95,7 +121,8 @@ pub async fn prepare_run(
     }
 
     let canonical_root = std::fs::canonicalize(source_root).map_err(DbError::Io)?;
-    let mut candidates = Vec::new();
+    let now = Utc::now();
+    let mut candidates: Vec<PackCandidate> = Vec::new();
     let mut total = 0usize;
     let mut seen = BTreeSet::new();
     for source in &loadout.sources {
@@ -157,7 +184,51 @@ pub async fn prepare_run(
             continue;
         }
         total += content.len();
-        candidates.push((source.clone(), content, hash));
+        candidates.push(PackCandidate {
+            kind: source.kind.clone(),
+            source: source.path.clone(),
+            title: source.path.clone(),
+            content,
+            hash,
+            required: source.required,
+            provenance: serde_json::json!({
+                "provider": "local",
+                "path": source.path,
+                "capturedAt": now,
+            }),
+        });
+    }
+
+    // Engine-computed extras (currently the Code Intelligence snapshot for
+    // agents that cannot query the index live over MCP). Appended after the
+    // file sources and subject to the same budgets: an item that does not fit
+    // the remaining byte/token budget is skipped, never an error — a degraded
+    // snapshot must not block the run.
+    for item in engine_items {
+        if candidates.len() >= loadout.max_items {
+            break;
+        }
+        let remaining = loadout.max_bytes.saturating_sub(total);
+        if item.content.len() > remaining {
+            continue;
+        }
+        if (total + item.content.len()).div_ceil(4) > loadout.max_tokens {
+            continue;
+        }
+        let hash = digest(item.content.as_bytes());
+        if !seen.insert(hash.clone()) {
+            continue;
+        }
+        total += item.content.len();
+        candidates.push(PackCandidate {
+            kind: item.kind,
+            source: item.source,
+            title: item.title,
+            content: item.content,
+            hash,
+            required: false,
+            provenance: item.provenance,
+        });
     }
 
     let estimated_tokens = total.div_ceil(4);
@@ -170,8 +241,8 @@ pub async fn prepare_run(
 
     let package_id = format!("ctx-{}", uuid::Uuid::new_v4().simple());
     let mut package_hasher = Sha256::new();
-    for (_, _, hash) in &candidates {
-        package_hasher.update(hash.as_bytes());
+    for candidate in &candidates {
+        package_hasher.update(candidate.hash.as_bytes());
     }
     let content_hash = format!("{:x}", package_hasher.finalize());
     let provider_status = serde_json::to_value(&health).unwrap_or_else(|_| serde_json::json!([]));
@@ -180,7 +251,6 @@ pub async fn prepare_run(
     } else {
         "ready"
     };
-    let now = Utc::now();
     let txn = conn.begin().await?;
     work_task_context_pack::ActiveModel {
         id: Set(package_id.clone()),
@@ -198,20 +268,19 @@ pub async fn prepare_run(
     .insert(&txn)
     .await?;
     let mut items = Vec::new();
-    for (ordinal, (source, content, hash)) in candidates.into_iter().enumerate() {
+    for (ordinal, candidate) in candidates.into_iter().enumerate() {
         let id = format!("ctxi-{}", uuid::Uuid::new_v4().simple());
-        let provenance =
-            serde_json::json!({"provider":"local","path":source.path,"capturedAt":now});
+        let provenance = candidate.provenance;
         work_task_context_item::ActiveModel {
             id: Set(id.clone()),
             package_id: Set(package_id.clone()),
             ordinal: Set(ordinal as i32),
-            kind: Set(source.kind.clone()),
-            source: Set(source.path.clone()),
-            title: Set(source.path.clone()),
-            content: Set(content.clone()),
-            content_hash: Set(hash.clone()),
-            required: Set(source.required),
+            kind: Set(candidate.kind.clone()),
+            source: Set(candidate.source.clone()),
+            title: Set(candidate.title.clone()),
+            content: Set(candidate.content.clone()),
+            content_hash: Set(candidate.hash.clone()),
+            required: Set(candidate.required),
             provenance: Set(provenance.to_string()),
         }
         .insert(&txn)
@@ -219,12 +288,12 @@ pub async fn prepare_run(
         items.push(ContextItemInfo {
             id,
             ordinal: ordinal as i32,
-            kind: source.kind,
-            source: source.path.clone(),
-            title: source.path,
-            content,
-            content_hash: hash,
-            required: source.required,
+            kind: candidate.kind,
+            source: candidate.source,
+            title: candidate.title,
+            content: candidate.content,
+            content_hash: candidate.hash,
+            required: candidate.required,
             provenance,
         });
     }
@@ -392,6 +461,22 @@ pub async fn check_provider_health(
             continue;
         }
         if provider.kind == "local" {
+            out.push(ContextProviderHealth {
+                id: provider.id.clone(),
+                kind: provider.kind.clone(),
+                status: "healthy".into(),
+                message: None,
+                checked_at,
+            });
+            continue;
+        }
+        if provider.kind == "code-intelligence" {
+            // Locally managed adapter provider. Validation forbids
+            // `required: true` for this kind, so availability never gates a
+            // run; real index state is surfaced through the Code
+            // Intelligence state API and Context Pack summary items rather
+            // than by probing the adapter here (health checks must not
+            // spawn processes or trigger downloads).
             out.push(ContextProviderHealth {
                 id: provider.id.clone(),
                 kind: provider.kind.clone(),

@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "Base de código",
+      "unavailable": "Inteligência de código indisponível",
+      "unavailableHint": "O runtime de inteligência de código falhou ao inicializar neste processo. Reinicie o aplicativo; se persistir, verifique os logs.",
+      "adapterTitle": "Binário do adaptador",
+      "adapterHint": "O Bugrail gerencia um binário codebase-memory-mcp de versão fixa. Ele nunca se autoatualiza; reinstale para revalidar.",
+      "notInstalled": "Não instalado",
+      "pinned": "versão fixa v{version}",
+      "install": "Instalar",
+      "source": {
+        "env_override": "override de env",
+        "preferences_override": "override de preferências",
+        "managed": "gerenciado"
+      },
+      "overrideLabel": "Caminho de override do binário",
+      "overridePlaceholder": "/caminho/para/codebase-memory-mcp (vazio = binário gerenciado)",
+      "overrideApply": "Aplicar",
+      "overrideClear": "Limpar override",
+      "overrideHint": "Overrides são validados antes do uso. Uma versão incompatível é recusada — sem fallback silencioso.",
+      "indexTitle": "Índice do projeto",
+      "indexHint": "Ativar indexa este repositório localmente. Agentes recebem apenas consultas somente leitura vinculadas ao projeto/worktree atual.",
+      "phase": {
+        "ready": "pronto",
+        "indexing": "indexando",
+        "not_indexed": "não indexado",
+        "unknown": "desconhecido"
+      },
+      "fileCount": "{count} arquivos indexados",
+      "reindex": "Reconstruir índice",
+      "openGraph": "Abrir grafo",
+      "graphOpened": "Interface do grafo aberta em {url}",
+      "recordsTitle": "Índices registrados",
+      "recordsHint": "Repositórios base persistem; índices de worktree de WorkTask são removidos junto com o worktree.",
+      "noRecords": "Nenhum índice registrado ainda.",
+      "worktreeRecord": "Worktree da WorkTask #{taskId} (temporário)",
+      "baseRecord": "Repositório base",
+      "enabledBadge": "ativado",
+      "disabledBadge": "desativado"
+    }
   }
 }

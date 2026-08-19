@@ -45,11 +45,12 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
 };
 use crate::acp::delegation::transport::{
-    client_ask_round_trip, client_cancel, client_cancel_task_round_trip, client_commit_feedback,
-    client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_round_trip, client_session_round_trip,
-    client_status_round_trip, client_task_complete_round_trip, client_task_progress_round_trip,
-    BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    client_ask_round_trip, client_cancel, client_cancel_task_round_trip, client_codebase_round_trip,
+    client_commit_feedback, client_create_automation_round_trip,
+    client_create_work_task_round_trip, client_feedback_round_trip, client_round_trip,
+    client_session_round_trip, client_status_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerCancelRequest,
+    BrokerCancelTaskRequest, BrokerCodebaseQueryRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerRequest, BrokerResponse, BrokerSessionRequest, BrokerStatusRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
@@ -152,6 +153,10 @@ pub struct CompanionFeatures {
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
     pub taskboard: bool,
+    /// Read-only `codebase_*` tools backed by Bugrail Code Intelligence.
+    /// Advertised only when at least one enabled index exists; every query is
+    /// bound server-side to the connected working directory.
+    pub codebase: bool,
 }
 
 impl CompanionFeatures {
@@ -171,6 +176,7 @@ impl CompanionFeatures {
                 tasks: false,
                 automations: false,
                 taskboard: false,
+                codebase: false,
             };
         };
         let mut f = Self {
@@ -181,6 +187,7 @@ impl CompanionFeatures {
             tasks: false,
             automations: false,
             taskboard: false,
+            codebase: false,
         };
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
@@ -191,6 +198,7 @@ impl CompanionFeatures {
                 "tasks" => f.tasks = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
+                "codebase" => f.codebase = true,
                 _ => {}
             }
         }
@@ -206,6 +214,15 @@ impl CompanionFeatures {
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
+            "codebase_status"
+            | "codebase_search"
+            | "codebase_trace"
+            | "codebase_query"
+            | "codebase_architecture"
+            | "codebase_impact"
+            | "codebase_snippet"
+            | "codebase_coverage"
+            | "codebase_text_search" => self.codebase,
             "delegate_to_agent" | "get_delegation_status" | "cancel_delegation" => self.delegation,
             _ => false,
         }
@@ -725,6 +742,30 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
+        }
+        // Read-only Code Intelligence tools. The listener binds the query to
+        // the enabled index covering this launch's connected working
+        // directory; `arguments` is forwarded verbatim (caps + `project`
+        // injection happen listener-side, never here).
+        "codebase_status"
+        | "codebase_search"
+        | "codebase_trace"
+        | "codebase_query"
+        | "codebase_architecture"
+        | "codebase_impact"
+        | "codebase_snippet"
+        | "codebase_coverage"
+        | "codebase_text_search" => {
+            let req = BrokerCodebaseQueryRequest {
+                token: ctx.token.clone(),
+                tool: name.to_string(),
+                arguments,
+            };
+            // No external_handle: a read-only query has nothing to cancel
+            // broker-side — canceling only suppresses the response.
+            let round_trip =
+                Box::pin(async move { client_codebase_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_codebase_result).await
         }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
@@ -1408,6 +1449,31 @@ pub fn render_authoring_result(outcome: &Value) -> Value {
     })
 }
 
+/// Map a `codebase_*` round-trip outcome (a serialized
+/// [`crate::acp::codebase_tools::CodebaseQueryOutcome`]) into an MCP
+/// `tools/call` result. The text is the adapter's answer verbatim (already
+/// capped and truncated listener-side); `is_error` distinguishes a real
+/// failure / degraded binding from a successful answer. A listener-side
+/// binding failure ("no index covers this directory") arrives as
+/// `is_error: true` text so the agent can tell the user to enable Code
+/// Intelligence instead of silently guessing from file reads.
+pub fn render_codebase_result(outcome: &Value) -> Value {
+    let text = outcome
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let is_error = outcome
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Build the human-readable summary block for a found session: a metadata header
 /// plus, when present, a "Recent messages" section.
 fn render_session_summary_text(o: &Value) -> String {
@@ -1539,6 +1605,7 @@ mod tests {
             tasks: false,
             automations: false,
             taskboard: false,
+            codebase: false,
         })
     }
 
@@ -2115,6 +2182,7 @@ mod tests {
         tasks: false,
         automations: false,
         taskboard: false,
+        codebase: false,
     };
     const BOTH: CompanionFeatures = CompanionFeatures {
         delegation: true,
@@ -2124,6 +2192,7 @@ mod tests {
         tasks: false,
         automations: false,
         taskboard: false,
+        codebase: false,
     };
     const ASK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -2133,6 +2202,7 @@ mod tests {
         tasks: false,
         automations: false,
         taskboard: false,
+        codebase: false,
     };
     const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -2142,6 +2212,7 @@ mod tests {
         tasks: false,
         automations: false,
         taskboard: false,
+        codebase: false,
     };
 
     fn list_tool_names(action: LineAction) -> Vec<String> {
@@ -2170,6 +2241,10 @@ mod tests {
         assert!(!ask.delegation && !ask.feedback && ask.ask);
         let sessions = CompanionFeatures::parse(Some("sessions"));
         assert!(!sessions.delegation && !sessions.feedback && !sessions.ask && sessions.sessions);
+        // codebase token: off unless named.
+        assert!(!def.codebase);
+        let cb = CompanionFeatures::parse(Some("codebase"));
+        assert!(cb.codebase && !cb.delegation);
         // Empty string → nothing enabled.
         let none = CompanionFeatures::parse(Some(""));
         assert!(!none.delegation && !none.feedback && !none.ask && !none.sessions);
@@ -2432,6 +2507,7 @@ mod tests {
         tasks: false,
         automations: true,
         taskboard: false,
+        codebase: false,
     };
     const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -2441,7 +2517,111 @@ mod tests {
         tasks: false,
         automations: false,
         taskboard: true,
+        codebase: false,
     };
+    const CODEBASE_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        tasks: false,
+        automations: false,
+        taskboard: false,
+        codebase: true,
+    };
+
+    const CODEBASE_TOOL_NAMES: [&str; 9] = [
+        "codebase_status",
+        "codebase_search",
+        "codebase_trace",
+        "codebase_query",
+        "codebase_architecture",
+        "codebase_impact",
+        "codebase_snippet",
+        "codebase_coverage",
+        "codebase_text_search",
+    ];
+
+    /// The codebase group gates as one unit: off by default, and when on it
+    /// exposes exactly the nine read-only tools (never an upstream write tool).
+    #[tokio::test]
+    async fn tools_list_gates_codebase_tools() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        // Default ctx is delegation-only: none of the nine appears.
+        let names = list_tool_names(dispatch_for_test(list).await);
+        for tool in CODEBASE_TOOL_NAMES {
+            assert!(!names.contains(&tool.to_string()), "{tool} leaked");
+        }
+        // Enabled: exactly the nine, and no write-side tool sneaks in.
+        let names = list_tool_names(dispatch_with_features(CODEBASE_ONLY, list).await);
+        assert_eq!(names.len(), CODEBASE_TOOL_NAMES.len());
+        for tool in CODEBASE_TOOL_NAMES {
+            assert!(names.contains(&tool.to_string()), "{tool} missing");
+        }
+        for forbidden in ["index_repository", "delete_project", "manage_adr", "ingest_traces"] {
+            assert!(!names.contains(&forbidden.to_string()));
+        }
+    }
+
+    /// With the group off, every codebase tool is rejected as unknown — the
+    /// same no-leak shape as the other gated groups.
+    #[tokio::test]
+    async fn codebase_tools_rejected_as_unknown_when_feature_off() {
+        for tool in CODEBASE_TOOL_NAMES {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 50, "method": "tools/call",
+                "params": { "name": tool, "arguments": {} }
+            })
+            .to_string();
+            let resp = unwrap_respond(dispatch_for_test(&line).await);
+            let e = resp.error.unwrap();
+            assert_eq!(e.code, -32602);
+            assert!(e.message.contains("unknown tool"), "{}: {}", tool, e.message);
+        }
+    }
+
+    /// Enabled: each of the nine dispatches to a broker round-trip (Spawn),
+    /// and the forwarded arguments are passed through verbatim — caps and
+    /// project binding are the listener's job, not the companion's.
+    #[tokio::test]
+    async fn codebase_tools_spawn_when_enabled() {
+        for tool in CODEBASE_TOOL_NAMES {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 51, "method": "tools/call",
+                "params": { "name": tool, "arguments": { "query": "x" } }
+            })
+            .to_string();
+            assert!(
+                matches!(
+                    dispatch_with_features(CODEBASE_ONLY, &line).await,
+                    LineAction::Spawn(_)
+                ),
+                "{tool} did not spawn"
+            );
+        }
+    }
+
+    /// The render passes the adapter's text through verbatim and maps
+    /// `is_error` onto the MCP `isError` flag — a degraded binding ("no index
+    /// here") must reach the LLM as readable text, not an empty result.
+    #[test]
+    fn render_codebase_result_maps_text_and_error() {
+        let ok = render_codebase_result(&json!({
+            "text": "found 3 symbols", "is_error": false, "project": "p"
+        }));
+        assert_eq!(ok["content"][0]["text"], "found 3 symbols");
+        assert_eq!(ok["isError"], false);
+        assert_eq!(ok["structuredContent"]["project"], "p");
+
+        let degraded = render_codebase_result(&json!({
+            "text": "no enabled index covers this directory", "is_error": true, "project": null
+        }));
+        assert_eq!(degraded["isError"], true);
+        assert!(degraded["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no enabled index"));
+    }
 
     /// The two authoring groups gate independently: enabling one must not
     /// surface the other's tool.

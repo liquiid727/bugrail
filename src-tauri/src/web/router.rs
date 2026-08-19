@@ -1415,6 +1415,30 @@ pub fn build_router(
             post(handlers::specos_control::integration_refresh),
         )
         .route(
+            "/code_intelligence_get_state",
+            post(handlers::code_intelligence::get_state),
+        )
+        .route(
+            "/code_intelligence_install",
+            post(handlers::code_intelligence::install),
+        )
+        .route(
+            "/code_intelligence_set_enabled",
+            post(handlers::code_intelligence::set_enabled),
+        )
+        .route(
+            "/code_intelligence_reindex",
+            post(handlers::code_intelligence::reindex),
+        )
+        .route(
+            "/code_intelligence_set_binary_override",
+            post(handlers::code_intelligence::set_binary_override),
+        )
+        .route(
+            "/code_intelligence_open_graph",
+            post(handlers::code_intelligence::open_graph),
+        )
+        .route(
             "/work_task_settings_get",
             post(handlers::work_task::work_task_settings_get),
         )

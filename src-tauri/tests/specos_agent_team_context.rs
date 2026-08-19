@@ -123,7 +123,10 @@ fn source(path: &str, required: bool) -> ContextSourceConfig {
     }
 }
 
-fn tiny_context(sources: Vec<ContextSourceConfig>, providers: Vec<ContextProviderConfig>) -> ContextConfig {
+fn tiny_context(
+    sources: Vec<ContextSourceConfig>,
+    providers: Vec<ContextProviderConfig>,
+) -> ContextConfig {
     let provider_ids = providers.iter().map(|p| p.id.clone()).collect();
     ContextConfig {
         version: 1,
@@ -142,23 +145,15 @@ fn tiny_context(sources: Vec<ContextSourceConfig>, providers: Vec<ContextProvide
     }
 }
 
-async fn claim_task(
-    conn: &sea_orm::DatabaseConnection,
-    folder_id: i32,
-    title: &str,
-) -> (i32, i32) {
+async fn claim_task(conn: &sea_orm::DatabaseConnection, folder_id: i32, title: &str) -> (i32, i32) {
     let created = work_task_service::create(conn, task(folder_id, title))
         .await
         .unwrap();
-    let seq = work_task_service::claim_for_run(
-        conn,
-        created.id,
-        work_task::WorkTaskStatus::Todo,
-        "test",
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let seq =
+        work_task_service::claim_for_run(conn, created.id, work_task::WorkTaskStatus::Todo, "test")
+            .await
+            .unwrap()
+            .unwrap();
     (created.id, seq)
 }
 
@@ -376,15 +371,11 @@ async fn t01_one_row_per_generation() {
             .unwrap();
     assert_eq!(first, 1);
     set_status(&db.conn, a.id, work_task::WorkTaskStatus::Failed).await;
-    let second = work_task_service::claim_for_run(
-        &db.conn,
-        a.id,
-        work_task::WorkTaskStatus::Failed,
-        "test",
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let second =
+        work_task_service::claim_for_run(&db.conn, a.id, work_task::WorkTaskStatus::Failed, "test")
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(second, 2);
     let runs = specos_runtime_service::list_runs(&db.conn, a.id)
         .await
@@ -401,14 +392,10 @@ async fn t02_claim_rollback() {
     let a = work_task_service::create(&db.conn, task(folder_id, "A"))
         .await
         .unwrap();
-    let lost = work_task_service::claim_for_run(
-        &db.conn,
-        a.id,
-        work_task::WorkTaskStatus::Review,
-        "test",
-    )
-    .await
-    .unwrap();
+    let lost =
+        work_task_service::claim_for_run(&db.conn, a.id, work_task::WorkTaskStatus::Review, "test")
+            .await
+            .unwrap();
     assert!(lost.is_none());
     assert_eq!(
         work_task::Entity::find()
@@ -807,6 +794,7 @@ async fn t01_deterministic_order_hash() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -819,6 +807,7 @@ async fn t01_deterministic_order_hash() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -827,7 +816,12 @@ async fn t01_deterministic_order_hash() {
     assert_eq!(first.package.content_hash, second.package.content_hash);
     assert!(!first.package.content_hash.is_empty());
     assert!(first.prompt.contains(&first.package.id));
-    let items: Vec<_> = first.package.items.iter().map(|i| i.source.as_str()).collect();
+    let items: Vec<_> = first
+        .package
+        .items
+        .iter()
+        .map(|i| i.source.as_str())
+        .collect();
     assert!(items.contains(&"AGENTS.md"));
 }
 
@@ -865,6 +859,7 @@ async fn t02_required_budget_block() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -901,6 +896,7 @@ async fn t03_optional_source_absence() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -914,8 +910,11 @@ async fn t04_path_and_symlink_escape() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join("secret.md"), "secret").unwrap();
-    std::os::unix::fs::symlink(outside.path().join("secret.md"), root.path().join("link.md"))
-        .unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.md"),
+        root.path().join("link.md"),
+    )
+    .unwrap();
     specos_control::save_context(
         root.path(),
         tiny_context(vec![source("link.md", true)], vec![]),
@@ -932,6 +931,7 @@ async fn t04_path_and_symlink_escape() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -960,11 +960,15 @@ async fn t05_retry_package_isolation() {
     let created = work_task_service::create(&db.conn, task(folder_id, "ctx"))
         .await
         .unwrap();
-    let seq1 =
-        work_task_service::claim_for_run(&db.conn, created.id, work_task::WorkTaskStatus::Todo, "t")
-            .await
-            .unwrap()
-            .unwrap();
+    let seq1 = work_task_service::claim_for_run(
+        &db.conn,
+        created.id,
+        work_task::WorkTaskStatus::Todo,
+        "t",
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let first = context::prepare_run(
         &db.conn,
         folder_id,
@@ -973,6 +977,7 @@ async fn t05_retry_package_isolation() {
         created.id,
         seq1,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -995,6 +1000,7 @@ async fn t05_retry_package_isolation() {
         created.id,
         seq2,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1005,8 +1011,14 @@ async fn t05_retry_package_isolation() {
     let bound = specos_runtime_service::list_runs(&db.conn, created.id)
         .await
         .unwrap();
-    assert_eq!(bound[0].context_package_id.as_deref(), Some(second.package.id.as_str()));
-    assert_eq!(bound[1].context_package_id.as_deref(), Some(first.package.id.as_str()));
+    assert_eq!(
+        bound[0].context_package_id.as_deref(),
+        Some(second.package.id.as_str())
+    );
+    assert_eq!(
+        bound[1].context_package_id.as_deref(),
+        Some(first.package.id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -1029,6 +1041,7 @@ async fn t06_post_restart_inspection() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1046,12 +1059,13 @@ async fn provider_t01_local_health_and_t03_required_block() {
     let local = ContextProviderConfig {
         id: "local".into(),
         kind: "local".into(),
+        adapter: None,
         endpoint: None,
         secret_env: None,
         enabled: true,
         required: false,
         capabilities: vec![],
-            ..Default::default()
+        ..Default::default()
     };
     let health =
         context::check_provider_health(std::slice::from_ref(&local), &test_memory(&db), 0).await;
@@ -1066,12 +1080,13 @@ async fn provider_t01_local_health_and_t03_required_block() {
             vec![ContextProviderConfig {
                 id: "remote".into(),
                 kind: "tencent-memory".into(),
+                adapter: None,
                 endpoint: Some("http://127.0.0.1:1".into()),
                 secret_env: Some("TENCENT_TOKEN".into()),
                 enabled: true,
                 required: true,
                 capabilities: vec!["memory".into()],
-                            ..Default::default()
+                ..Default::default()
             }],
         ),
     )
@@ -1086,6 +1101,7 @@ async fn provider_t01_local_health_and_t03_required_block() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1093,7 +1109,10 @@ async fn provider_t01_local_health_and_t03_required_block() {
         Ok(_) => panic!("required unavailable provider must block"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("required context provider"), "{err}");
+    assert!(
+        err.to_string().contains("required context provider"),
+        "{err}"
+    );
 }
 
 #[tokio::test]
@@ -1107,12 +1126,13 @@ async fn provider_t04_optional_degradation() {
             vec![ContextProviderConfig {
                 id: "remote".into(),
                 kind: "tencent-memory".into(),
+                adapter: None,
                 endpoint: Some("http://127.0.0.1:1".into()),
                 secret_env: Some("TENCENT_TOKEN".into()),
                 enabled: true,
                 required: false,
                 capabilities: vec!["memory".into()],
-                            ..Default::default()
+                ..Default::default()
             }],
         ),
     )
@@ -1128,6 +1148,7 @@ async fn provider_t04_optional_degradation() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1141,12 +1162,13 @@ async fn provider_t05_timeout_and_redaction() {
     let disabled = ContextProviderConfig {
         id: "off".into(),
         kind: "tencent-memory".into(),
+        adapter: None,
         endpoint: Some("http://127.0.0.1:1".into()),
         secret_env: Some("TENCENT_TOKEN".into()),
         enabled: false,
         required: false,
         capabilities: vec![],
-            ..Default::default()
+        ..Default::default()
     };
     let health = context::check_provider_health(&[disabled], &test_memory(&db), 0).await;
     assert_eq!(health[0].status, "disabled");
@@ -1159,12 +1181,13 @@ async fn provider_t05_timeout_and_redaction() {
         vec![ContextProviderConfig {
             id: "remote".into(),
             kind: "tencent-memory".into(),
+            adapter: None,
             endpoint: Some("file:///tmp/socket".into()),
             secret_env: Some("not-safe".into()),
             enabled: false,
             required: true,
             capabilities: vec![],
-                    ..Default::default()
+            ..Default::default()
         }],
     );
     let errors = specos_control::validate_context(&invalid).join("; ");
@@ -1173,13 +1196,124 @@ async fn provider_t05_timeout_and_redaction() {
     assert!(errors.contains("uppercase environment"));
 }
 
+fn codebase_provider(required: bool) -> ContextProviderConfig {
+    ContextProviderConfig {
+        id: "codebase".into(),
+        kind: "code-intelligence".into(),
+        adapter: Some("codebase-memory-mcp".into()),
+        endpoint: None,
+        secret_env: None,
+        enabled: true,
+        required,
+        capabilities: vec![
+            "code.search".into(),
+            "code.trace".into(),
+            "code.architecture".into(),
+            "code.impact".into(),
+            "code.coverage".into(),
+        ],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn provider_codebase_valid_config_is_accepted() {
+    let config = tiny_context(vec![], vec![codebase_provider(false)]);
+    assert!(
+        specos_control::validate_context(&config).is_empty(),
+        "valid code-intelligence provider must validate"
+    );
+    // Health is statically healthy — never blocks, never probes.
+    let db = fresh_in_memory_db().await;
+    let health =
+        context::check_provider_health(&[codebase_provider(false)], &test_memory(&db), 0).await;
+    assert_eq!(health[0].status, "healthy");
+}
+
+#[tokio::test]
+async fn provider_codebase_required_is_forbidden() {
+    let config = tiny_context(vec![], vec![codebase_provider(true)]);
+    let errors = specos_control::validate_context(&config).join("; ");
+    assert!(errors.contains("must not be required"), "{errors}");
+}
+
+#[tokio::test]
+async fn provider_codebase_adapter_is_pinned_and_local_only() {
+    let mut provider = codebase_provider(false);
+    provider.adapter = Some("some-other-adapter".into());
+    let errors = specos_control::validate_context(&tiny_context(vec![], vec![provider])).join("; ");
+    assert!(errors.contains("unknown adapter"), "{errors}");
+
+    let mut provider = codebase_provider(false);
+    provider.adapter = None;
+    let errors = specos_control::validate_context(&tiny_context(vec![], vec![provider])).join("; ");
+    assert!(errors.contains("requires adapter"), "{errors}");
+
+    let mut provider = codebase_provider(false);
+    provider.endpoint = Some("http://127.0.0.1:9".into());
+    let errors = specos_control::validate_context(&tiny_context(vec![], vec![provider])).join("; ");
+    assert!(errors.contains("must not set endpoint"), "{errors}");
+}
+
+#[tokio::test]
+async fn provider_codebase_yaml_compat_round_trip() {
+    // A pre-existing context.yaml without the `adapter` field still loads —
+    // existing provider kinds are unaffected by the new optional field.
+    let legacy = r#"
+version: 1
+defaultLoadoutId: default
+providers:
+  - id: remote
+    kind: tencent-memory
+    endpoint: "https://example.com"
+    enabled: true
+    required: false
+    capabilities: []
+loadouts:
+  - id: default
+    name: Default
+    sources: []
+    providerIds: [remote]
+    maxItems: 16
+    maxBytes: 32768
+    maxTokens: 8000
+"#;
+    let parsed: codeg_lib::models::ContextConfig = serde_yaml::from_str(legacy).unwrap();
+    assert!(parsed.providers[0].adapter.is_none());
+    assert!(specos_control::validate_context(&parsed).is_empty());
+
+    // Serializing a provider without adapter must not emit the field.
+    let dumped = serde_yaml::to_string(&parsed).unwrap();
+    assert!(!dumped.contains("adapter"));
+
+    // The approved code-intelligence provider shape parses and validates.
+    let with_codebase = r#"
+version: 1
+defaultLoadoutId: default
+providers:
+  - id: codebase
+    kind: code-intelligence
+    adapter: codebase-memory-mcp
+    enabled: true
+    required: false
+    capabilities: [code.search, code.trace, code.architecture, code.impact, code.coverage]
+loadouts:
+  - id: default
+    name: Default
+    sources: []
+    providerIds: [codebase]
+    maxItems: 16
+    maxBytes: 32768
+    maxTokens: 8000
+"#;
+    let parsed: codeg_lib::models::ContextConfig = serde_yaml::from_str(with_codebase).unwrap();
+    assert!(specos_control::validate_context(&parsed).is_empty());
+}
+
 #[tokio::test]
 async fn loadout_t01_precedence_and_t06_prompt_order() {
     let root = tempfile::tempdir().unwrap();
-    write_project(
-        root.path(),
-        &[("a.md", "A"), ("b.md", "B"), ("c.md", "C")],
-    );
+    write_project(root.path(), &[("a.md", "A"), ("b.md", "B"), ("c.md", "C")]);
     specos_control::save_context(
         root.path(),
         ContextConfig {
@@ -1215,11 +1349,15 @@ async fn loadout_t01_precedence_and_t06_prompt_order() {
     let created = work_task_service::create(&db.conn, task(folder_id, "ctx"))
         .await
         .unwrap();
-    let seq1 =
-        work_task_service::claim_for_run(&db.conn, created.id, work_task::WorkTaskStatus::Todo, "t")
-            .await
-            .unwrap()
-            .unwrap();
+    let seq1 = work_task_service::claim_for_run(
+        &db.conn,
+        created.id,
+        work_task::WorkTaskStatus::Todo,
+        "t",
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let default_pkg = context::prepare_run(
         &db.conn,
         folder_id,
@@ -1228,6 +1366,7 @@ async fn loadout_t01_precedence_and_t06_prompt_order() {
         created.id,
         seq1,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1253,6 +1392,7 @@ async fn loadout_t01_precedence_and_t06_prompt_order() {
         created.id,
         seq2,
         Some("review"),
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1288,6 +1428,7 @@ async fn loadout_t03_dedupe_and_budget() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1315,6 +1456,7 @@ async fn inspector_t02_t03_t05_overview_join_and_activity() {
         task_id,
         seq,
         None,
+        Vec::new(),
         &test_memory(&db),
     )
     .await
@@ -1327,7 +1469,10 @@ async fn inspector_t02_t03_t05_overview_join_and_activity() {
     assert_eq!(overview.packages[0].task_id, task_id);
     assert_eq!(overview.packages[0].run_seq, seq);
     assert!(!overview.activity.is_empty());
-    assert!(overview.packages[0].items[0].provenance.get("path").is_some());
+    assert!(overview.packages[0].items[0]
+        .provenance
+        .get("path")
+        .is_some());
 }
 
 // ── BUGRAIL-SPECOS-005 Git truth ──────────────────────────────────────────
@@ -1393,11 +1538,7 @@ fn init_repo_with_sources() -> (tempfile::TempDir, String, String) {
     (dir, head_a, head_b)
 }
 
-async fn set_branch(
-    conn: &sea_orm::DatabaseConnection,
-    id: i32,
-    branch: &str,
-) {
+async fn set_branch(conn: &sea_orm::DatabaseConnection, id: i32, branch: &str) {
     let row = work_task::Entity::find_by_id(id)
         .one(conn)
         .await
@@ -1418,14 +1559,9 @@ async fn t02_missing_handoff_blocks_integration() {
     let integ = work_task_service::create(&db.conn, task(folder_id, "integ"))
         .await
         .unwrap();
-    specos_runtime_service::add_dependency(
-        &db.conn,
-        source.id,
-        integ.id,
-        "integration_source",
-    )
-    .await
-    .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, source.id, integ.id, "integration_source")
+        .await
+        .unwrap();
     set_status(&db.conn, source.id, work_task::WorkTaskStatus::Review).await;
     set_branch(&db.conn, source.id, "src-a").await;
     assert!(
@@ -1454,33 +1590,18 @@ async fn t03_source_head_order() {
     let integ = work_task_service::create(&db.conn, task(folder_id, "I"))
         .await
         .unwrap();
-    specos_runtime_service::add_dependency(
-        &db.conn,
-        src_a.id,
-        integ.id,
-        "integration_source",
-    )
-    .await
-    .unwrap();
-    specos_runtime_service::add_dependency(
-        &db.conn,
-        src_b.id,
-        integ.id,
-        "integration_source",
-    )
-    .await
-    .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, src_a.id, integ.id, "integration_source")
+        .await
+        .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, src_b.id, integ.id, "integration_source")
+        .await
+        .unwrap();
     for (id, branch) in [(src_a.id, "src-a"), (src_b.id, "src-b")] {
         set_status(&db.conn, id, work_task::WorkTaskStatus::Review).await;
         set_branch(&db.conn, id, branch).await;
-        work_task_service::claim_for_run(
-            &db.conn,
-            id,
-            work_task::WorkTaskStatus::Review,
-            "test",
-        )
-        .await
-        .ok();
+        work_task_service::claim_for_run(&db.conn, id, work_task::WorkTaskStatus::Review, "test")
+            .await
+            .ok();
     }
     // Sources must stay in review with a handoff on the live run_seq.
     for id in [src_a.id, src_b.id] {
@@ -1550,14 +1671,9 @@ async fn t04_conflict_recovery() {
     let src = work_task_service::create(&db.conn, task(folder_id, "A"))
         .await
         .unwrap();
-    specos_runtime_service::add_dependency(
-        &db.conn,
-        src.id,
-        integ.id,
-        "integration_source",
-    )
-    .await
-    .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, src.id, integ.id, "integration_source")
+        .await
+        .unwrap();
     let plan = specos_runtime_service::integration_plan(
         &db.conn,
         integ.id,
@@ -1592,14 +1708,9 @@ async fn t05_gated_integration_landing() {
     let integ = work_task_service::create(&db.conn, task(folder_id, "I"))
         .await
         .unwrap();
-    specos_runtime_service::add_dependency(
-        &db.conn,
-        src.id,
-        integ.id,
-        "integration_source",
-    )
-    .await
-    .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, src.id, integ.id, "integration_source")
+        .await
+        .unwrap();
     set_status(&db.conn, src.id, work_task::WorkTaskStatus::Review).await;
     set_branch(&db.conn, src.id, "src-a").await;
     specos_runtime_service::save_handoff(
@@ -1647,8 +1758,148 @@ async fn t05_gated_integration_landing() {
     )
     .await
     .unwrap_err();
+    assert!(err.to_string().contains("notContained"), "{err}");
+}
+
+// ── Code Intelligence engine items (non-MCP agents get a snapshot item) ──
+
+fn code_intel_item(content: &str) -> context::EngineContextItem {
+    context::EngineContextItem {
+        kind: "code-intelligence".into(),
+        source: "code-intelligence/codebase-memory-mcp".into(),
+        title: "Code Intelligence summary".into(),
+        content: content.into(),
+        provenance: serde_json::json!({
+            "provider": "code-intelligence",
+            "adapter": "codebase-memory-mcp",
+        }),
+    }
+}
+
+#[tokio::test]
+async fn engine_item_appended_after_sources_with_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(root.path(), &[("AGENTS.md", "# agents\n")]);
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, root.path().to_str().unwrap()).await;
+    let (task_id, seq) = claim_task(&db.conn, folder_id, "ctx").await;
+    let summary = "{\"schema\":\"bugrail.code-intelligence.summary\",\"version\":1}";
+    let prepared = context::prepare_run(
+        &db.conn,
+        folder_id,
+        root.path(),
+        root.path(),
+        task_id,
+        seq,
+        None,
+        vec![code_intel_item(summary)],
+        &test_memory(&db),
+    )
+    .await
+    .unwrap();
+    let intel: Vec<_> = prepared
+        .package
+        .items
+        .iter()
+        .filter(|i| i.kind == "code-intelligence")
+        .collect();
+    assert_eq!(intel.len(), 1, "engine item must be appended exactly once");
+    let item = intel[0];
+    assert_eq!(item.source, "code-intelligence/codebase-memory-mcp");
+    assert_eq!(item.title, "Code Intelligence summary");
+    assert_eq!(item.content, summary);
+    assert!(!item.required, "engine items never gate a run");
+    assert_eq!(item.provenance["provider"], "code-intelligence");
+    // Appended AFTER the file sources: every file item precedes it.
+    let intel_ordinal = item.ordinal;
+    assert!(prepared
+        .package
+        .items
+        .iter()
+        .filter(|i| i.kind != "code-intelligence")
+        .all(|i| i.ordinal < intel_ordinal));
+    // And it lands in the prompt the agent actually receives.
+    assert!(prepared
+        .prompt
+        .contains("bugrail.code-intelligence.summary"));
+}
+
+#[tokio::test]
+async fn engine_item_over_budget_is_skipped_not_fatal() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(root.path(), &[("AGENTS.md", "# a\n")]);
+    specos_control::save_context(
+        root.path(),
+        ContextConfig {
+            version: 1,
+            default_loadout_id: "default".into(),
+            providers: vec![],
+            loadouts: vec![ContextLoadout {
+                id: "default".into(),
+                name: "tiny".into(),
+                sources: vec![source("AGENTS.md", false)],
+                provider_ids: vec![],
+                max_items: 8,
+                max_bytes: 32,
+                max_tokens: 8_000,
+            }],
+            validation_errors: vec![],
+        },
+    )
+    .unwrap();
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, root.path().to_str().unwrap()).await;
+    let (task_id, seq) = claim_task(&db.conn, folder_id, "ctx").await;
+    let prepared = context::prepare_run(
+        &db.conn,
+        folder_id,
+        root.path(),
+        root.path(),
+        task_id,
+        seq,
+        None,
+        vec![code_intel_item(&"x".repeat(100))],
+        &test_memory(&db),
+    )
+    .await
+    .expect("a degraded snapshot must never block the run");
     assert!(
-        err.to_string().contains("notContained"),
-        "{err}"
+        prepared
+            .package
+            .items
+            .iter()
+            .all(|i| i.kind != "code-intelligence"),
+        "oversize engine item must be skipped, not fail the package"
+    );
+    assert_eq!(prepared.package.status, "ready");
+}
+
+#[tokio::test]
+async fn engine_item_duplicating_a_source_is_deduplicated() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(root.path(), &[("AGENTS.md", "# agents\n")]);
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, root.path().to_str().unwrap()).await;
+    let (task_id, seq) = claim_task(&db.conn, folder_id, "ctx").await;
+    let prepared = context::prepare_run(
+        &db.conn,
+        folder_id,
+        root.path(),
+        root.path(),
+        task_id,
+        seq,
+        None,
+        vec![code_intel_item("# agents\n")],
+        &test_memory(&db),
+    )
+    .await
+    .unwrap();
+    assert!(
+        prepared
+            .package
+            .items
+            .iter()
+            .all(|i| i.kind != "code-intelligence"),
+        "content-identical engine item must dedupe against the file source"
     );
 }

@@ -37,6 +37,8 @@ import type {
   ContextConfig,
   ContextOverview,
   ContextPackageInfo,
+  CodeIntelState,
+  CodeIntelInstallState,
   WorkTaskRunInfo,
   WorkTaskDependencyInfo,
   WorkTaskHandoffDraft,
@@ -3474,6 +3476,51 @@ export async function specosWorkTaskIntegrationRefresh(
   return getTransport().call("specos_work_task_integration_refresh", {
     taskId,
   })
+}
+
+// Code Intelligence (Codebase Memory adapter)
+
+export async function codeIntelligenceGetState(
+  folderId: number
+): Promise<CodeIntelState> {
+  return getTransport().call("code_intelligence_get_state", { folderId })
+}
+
+export async function codeIntelligenceInstall(): Promise<CodeIntelInstallState> {
+  return getTransport().call("code_intelligence_install", {})
+}
+
+export async function codeIntelligenceSetEnabled(
+  folderId: number,
+  enabled: boolean
+): Promise<CodeIntelState> {
+  return getTransport().call("code_intelligence_set_enabled", {
+    folderId,
+    enabled,
+  })
+}
+
+export async function codeIntelligenceReindex(
+  folderId: number
+): Promise<CodeIntelState> {
+  return getTransport().call("code_intelligence_reindex", { folderId })
+}
+
+export async function codeIntelligenceSetBinaryOverride(
+  path: string | null
+): Promise<CodeIntelInstallState> {
+  return getTransport().call("code_intelligence_set_binary_override", {
+    path,
+  })
+}
+
+/** Desktop only — the server refuses (no remote Graph UI in v1). */
+export async function codeIntelligenceOpenGraph(): Promise<string> {
+  const result = await getTransport().call<{ url?: string } | string>(
+    "code_intelligence_open_graph",
+    {}
+  )
+  return typeof result === "string" ? result : (result.url ?? "")
 }
 
 // Directory browser (for web/server mode)

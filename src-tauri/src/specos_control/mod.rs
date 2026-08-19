@@ -368,6 +368,36 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
                 provider.id
             ));
         }
+        if provider.kind == "code-intelligence" {
+            // Code Intelligence is a local adapter provider: it is always
+            // optional (a degraded index never blocks a run) and never takes
+            // a remote endpoint or secret.
+            if provider.required {
+                errors.push(format!(
+                    "code-intelligence provider '{}' must not be required — degraded indexing never blocks runs",
+                    provider.id
+                ));
+            }
+            match provider.adapter.as_deref() {
+                Some(crate::code_intelligence::manifest::ADAPTER_ID) => {}
+                Some(other) => errors.push(format!(
+                    "code-intelligence provider '{}' has unknown adapter '{other}' (expected '{}')",
+                    provider.id,
+                    crate::code_intelligence::manifest::ADAPTER_ID
+                )),
+                None => errors.push(format!(
+                    "code-intelligence provider '{}' requires adapter: {}",
+                    provider.id,
+                    crate::code_intelligence::manifest::ADAPTER_ID
+                )),
+            }
+            if provider.endpoint.is_some() || provider.secret_env.is_some() {
+                errors.push(format!(
+                    "code-intelligence provider '{}' must not set endpoint or secretEnv",
+                    provider.id
+                ));
+            }
+        }
         if let Some(endpoint) = &provider.endpoint {
             if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
                 errors.push(format!(
@@ -390,7 +420,7 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
         // fields entirely.
         if provider.kind == crate::memory::MEMORY_KIND {
             errors.extend(crate::memory::config::validate_memory_provider(provider));
-        } else if provider.adapter.is_some() {
+        } else if provider.kind != "code-intelligence" && provider.adapter.is_some() {
             errors.push(format!(
                 "context provider '{}' adapter is only valid for kind '{}'",
                 provider.id,

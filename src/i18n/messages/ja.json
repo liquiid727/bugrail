@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "コードベース",
+      "unavailable": "コードインテリジェンスを利用できません",
+      "unavailableHint": "このプロセスでコードインテリジェンスの初期化に失敗しました。アプリを再起動してください。解決しない場合はログを確認してください。",
+      "adapterTitle": "アダプターバイナリ",
+      "adapterHint": "Bugrail は固定バージョンの codebase-memory-mcp バイナリを管理します。自動更新はしません。再インストールで再検証できます。",
+      "notInstalled": "未インストール",
+      "pinned": "固定バージョン v{version}",
+      "install": "インストール",
+      "source": {
+        "env_override": "環境変数オーバーライド",
+        "preferences_override": "設定オーバーライド",
+        "managed": "管理"
+      },
+      "overrideLabel": "バイナリオーバーライドパス",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp（空欄なら管理バイナリ）",
+      "overrideApply": "適用",
+      "overrideClear": "オーバーライドを解除",
+      "overrideHint": "オーバーライドは使用前に検証されます。互換性のないバージョンは拒否され、サイレントなフォールバックはしません。",
+      "indexTitle": "プロジェクトインデックス",
+      "indexHint": "有効にすると、このリポジトリをローカルでインデックス化します。エージェントには現在のプロジェクト/ワークツリーに結び付いた読み取り専用クエリのみが提供されます。",
+      "phase": {
+        "ready": "準備完了",
+        "indexing": "インデックス中",
+        "not_indexed": "未インデックス",
+        "unknown": "不明"
+      },
+      "fileCount": "{count} ファイルをインデックス済み",
+      "reindex": "インデックスを再構築",
+      "openGraph": "グラフを開く",
+      "graphOpened": "グラフ UI を {url} で開きました",
+      "recordsTitle": "登録済みインデックス",
+      "recordsHint": "ベースリポジトリは永続化されます。WorkTask ワークツリーのインデックスはワークツリーと共に削除されます。",
+      "noRecords": "登録済みのインデックスはありません。",
+      "worktreeRecord": "WorkTask #{taskId} ワークツリー（一時）",
+      "baseRecord": "ベースリポジトリ",
+      "enabledBadge": "有効",
+      "disabledBadge": "無効"
+    }
   }
 }

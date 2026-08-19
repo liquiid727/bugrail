@@ -3264,6 +3264,15 @@ fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi)
 }
 
+/// Whether sessions of `agent_type` receive MCP tools over the ACP wire at
+/// all — the same gate session/new applies before injecting user servers and
+/// the codeg-mcp companion. Agents that fail it can never get the live
+/// `codebase_*` tools, so the WorkTask engine gives them the Code
+/// Intelligence snapshot as a Context Pack item instead.
+pub fn agent_receives_wire_mcp(agent_type: AgentType) -> bool {
+    registry::get_agent_meta(agent_type).supports_mcp && agent_delivers_wire_mcp(agent_type)
+}
+
 /// Load MCP servers configured for `agent_type` and convert them into the
 /// ACP wire format. Errors and unsupported entries are logged and skipped so
 /// a single malformed entry never blocks a session from starting.
@@ -3506,6 +3515,12 @@ struct CompanionFeatureFlags {
     automations: bool,
     /// `create_work_task`, gated by the chat-authoring setting.
     taskboard: bool,
+    /// Read-only `codebase_*` tools (Bugrail Code Intelligence). Advertised
+    /// only when at least one enabled index exists at injection time; every
+    /// query is bound to this connection's working directory listener-side.
+    /// Not gated by `host_tools`: the tools answer from a local read-only
+    /// index and never execute commands or read arbitrary files.
+    codebase: bool,
 }
 
 /// The `--features` value for a companion launch, or `None` when no group is
@@ -3536,10 +3551,25 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.taskboard {
         features.push("taskboard");
     }
+    if flags.codebase {
+        features.push("codebase");
+    }
     if features.is_empty() {
         return None;
     }
     Some(features.join(","))
+}
+
+/// Whether the read-only `codebase_*` tool group should be advertised for a
+/// launch. Cheap synchronous check: the Code Intelligence runtime must be
+/// initialized AND the registry must hold at least one enabled index — with
+/// no index the tools could only answer "not indexed", so keep the tool list
+/// clean. The listener re-checks per query (a disabled or vanished index
+/// degrades to a readable `is_error` outcome), so staleness here is cosmetic.
+fn codebase_tools_available() -> bool {
+    crate::code_intelligence::runtime()
+        .map(|rt| !rt.registry().enabled().is_empty())
+        .unwrap_or(false)
 }
 
 /// Outcome of injecting the `codeg-mcp` companion: the per-launch token to
@@ -3597,6 +3627,7 @@ async fn inject_codeg_mcp(
         tasks: tasks_enabled,
         automations: authoring.automations_enabled,
         taskboard: authoring.work_tasks_enabled,
+        codebase: codebase_tools_available(),
     };
     // `None` (no feature enabled) short-circuits the whole injection.
     let features_arg = companion_features_arg(flags)?;
@@ -15946,6 +15977,9 @@ mod tests {
             Some("automations".to_string())
         );
         assert_eq!(only(|f| f.taskboard = true), Some("taskboard".to_string()));
+        // Codebase group: injects the companion on its own too (read-only index
+        // queries are still worth a companion launch).
+        assert_eq!(only(|f| f.codebase = true), Some("codebase".to_string()));
         // All on → comma-joined, in the order the companion parses.
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
@@ -15956,8 +15990,9 @@ mod tests {
                 tasks: true,
                 automations: true,
                 taskboard: true,
+                codebase: true,
             }),
-            Some("delegation,feedback,ask,sessions,tasks,automations,taskboard".to_string())
+            Some("delegation,feedback,ask,sessions,tasks,automations,taskboard,codebase".to_string())
         );
     }
 

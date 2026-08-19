@@ -5082,6 +5082,45 @@
     "maxTokens": "最大 Token",
     "providerIds": "Provider ID（逗号分隔）",
     "sourcesEditor": "有序来源",
-    "sourcesHint": "每行一项：路径 | 类型 | required 或 optional"
+    "sourcesHint": "每行一项：路径 | 类型 | required 或 optional",
+    "codebase": {
+      "title": "代码库",
+      "unavailable": "代码智能不可用",
+      "unavailableHint": "代码智能运行时在本进程中初始化失败。请重启应用；若持续出现，请查看日志。",
+      "adapterTitle": "适配器二进制",
+      "adapterHint": "Bugrail 管理固定版本的 codebase-memory-mcp 二进制，不会自动更新；重新安装可重新校验。",
+      "notInstalled": "未安装",
+      "pinned": "固定版本 v{version}",
+      "install": "安装",
+      "source": {
+        "env_override": "环境变量覆盖",
+        "preferences_override": "首选项覆盖",
+        "managed": "托管"
+      },
+      "overrideLabel": "二进制覆盖路径",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp（留空使用托管二进制）",
+      "overrideApply": "应用",
+      "overrideClear": "清除覆盖",
+      "overrideHint": "覆盖路径在使用前会被校验；不兼容的版本会被拒绝，不会静默回退。",
+      "indexTitle": "项目索引",
+      "indexHint": "启用后将在本地为该仓库建立索引。智能体只能获得绑定到当前项目/工作树的只读查询。",
+      "phase": {
+        "ready": "就绪",
+        "indexing": "索引中",
+        "not_indexed": "未索引",
+        "unknown": "未知"
+      },
+      "fileCount": "已索引 {count} 个文件",
+      "reindex": "重建索引",
+      "openGraph": "打开图谱",
+      "graphOpened": "图谱界面已在 {url} 打开",
+      "recordsTitle": "已注册的索引",
+      "recordsHint": "基础仓库的索引持久保留；WorkTask 工作树索引会随工作树一起删除。",
+      "noRecords": "尚未注册任何索引。",
+      "worktreeRecord": "WorkTask #{taskId} 工作树（临时）",
+      "baseRecord": "基础仓库",
+      "enabledBadge": "已启用",
+      "disabledBadge": "已禁用"
+    }
   }
 }

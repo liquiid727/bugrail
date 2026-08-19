@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "قاعدة الشيفرة",
+      "unavailable": "ذكاء الشيفرة غير متاح",
+      "unavailableHint": "فشلت تهيئة بيئة ذكاء الشيفرة في هذه العملية. أعد تشغيل التطبيق؛ إذا استمرت المشكلة فراجع السجلات.",
+      "adapterTitle": "ملف المحوّل الثنائي",
+      "adapterHint": "يدير Bugrail ملف codebase-memory-mcp ثنائيًا بإصدار مثبّت. لا يحدَّث ذاتيًا أبدًا؛ أعد التثبيت لإعادة التحقق.",
+      "notInstalled": "غير مثبّت",
+      "pinned": "الإصدار المثبّت v{version}",
+      "install": "تثبيت",
+      "source": {
+        "env_override": "تجاوز متغير البيئة",
+        "preferences_override": "تجاوز التفضيلات",
+        "managed": "مُدار"
+      },
+      "overrideLabel": "مسار تجاوز الملف الثنائي",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp (فارغ = الملف المُدار)",
+      "overrideApply": "تطبيق",
+      "overrideClear": "مسح التجاوز",
+      "overrideHint": "يُتحقق من التجاوزات قبل الاستخدام. يُرفض الإصدار غير المتوافق — لا يوجد تراجع صامت.",
+      "indexTitle": "فهرس المشروع",
+      "indexHint": "عند التفعيل يُفهرس هذا المستودع محليًا. تحصل الوكلاء على استعلامات للقراءة فقط مرتبطة بالمشروع/شجرة العمل الحالية.",
+      "phase": {
+        "ready": "جاهز",
+        "indexing": "جارٍ الفهرسة",
+        "not_indexed": "غير مفهرس",
+        "unknown": "غير معروف"
+      },
+      "fileCount": "{count} ملفًا مفهرسًا",
+      "reindex": "إعادة بناء الفهرس",
+      "openGraph": "فتح المخطط",
+      "graphOpened": "فُتحت واجهة المخطط على {url}",
+      "recordsTitle": "الفهارس المسجّلة",
+      "recordsHint": "تبقى المستودعات الأساسية؛ تُحذف فهارس أشجار عمل WorkTask مع أشجارها.",
+      "noRecords": "لا توجد فهارس مسجّلة بعد.",
+      "worktreeRecord": "شجرة عمل WorkTask ‎#{taskId} (مؤقتة)",
+      "baseRecord": "المستودع الأساسي",
+      "enabledBadge": "مفعّل",
+      "disabledBadge": "معطّل"
+    }
   }
 }

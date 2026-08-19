@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "程式碼庫",
+      "unavailable": "程式碼智能不可用",
+      "unavailableHint": "程式碼智能執行階段在本程序中初始化失敗。請重新啟動應用程式；若持續出現，請檢視日誌。",
+      "adapterTitle": "轉接器二進位",
+      "adapterHint": "Bugrail 管理固定版本的 codebase-memory-mcp 二進位，不會自動更新；重新安裝可重新校驗。",
+      "notInstalled": "未安裝",
+      "pinned": "固定版本 v{version}",
+      "install": "安裝",
+      "source": {
+        "env_override": "環境變數覆寫",
+        "preferences_override": "偏好設定覆寫",
+        "managed": "託管"
+      },
+      "overrideLabel": "二進位覆寫路徑",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp（留空使用託管二進位）",
+      "overrideApply": "套用",
+      "overrideClear": "清除覆寫",
+      "overrideHint": "覆寫路徑在使用前會被校驗；不相容的版本會被拒絕，不會靜默回退。",
+      "indexTitle": "專案索引",
+      "indexHint": "啟用後會在本地為該儲存庫建立索引。代理只能取得綁定到目前專案/工作樹的唯讀查詢。",
+      "phase": {
+        "ready": "就緒",
+        "indexing": "索引中",
+        "not_indexed": "未索引",
+        "unknown": "未知"
+      },
+      "fileCount": "已索引 {count} 個檔案",
+      "reindex": "重建索引",
+      "openGraph": "開啟圖譜",
+      "graphOpened": "圖譜介面已在 {url} 開啟",
+      "recordsTitle": "已註冊的索引",
+      "recordsHint": "基礎儲存庫的索引持久保留；WorkTask 工作樹索引會隨工作樹一起刪除。",
+      "noRecords": "尚未註冊任何索引。",
+      "worktreeRecord": "WorkTask #{taskId} 工作樹（臨時）",
+      "baseRecord": "基礎儲存庫",
+      "enabledBadge": "已啟用",
+      "disabledBadge": "已停用"
+    }
   }
 }

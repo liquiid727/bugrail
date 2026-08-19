@@ -17,6 +17,11 @@ const PREFERENCES_FILE_NAME: &str = "preferences.json";
 #[serde(default)]
 pub struct AppPreferences {
     pub disable_hardware_acceleration: bool,
+    /// Absolute path to a user-supplied `codebase-memory-mcp` binary used
+    /// instead of the managed pinned-version binary. Second tier of Code
+    /// Intelligence binary resolution (after the `CODEG_CBM_BIN` env var).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase_memory_mcp_path: Option<String>,
 }
 
 pub fn preferences_file_path() -> Option<PathBuf> {

@@ -18,12 +18,13 @@ use tokio::sync::RwLock;
 use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerFeedbackRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerCodebaseQueryRequest, BrokerCommitFeedbackRequest, BrokerFeedbackRequest,
+    BrokerMessage, BrokerRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerResponse, BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::types::{DelegationRequest, DelegationTaskReport, TaskStatus};
+use crate::acp::codebase_tools::{CodebaseQueryOutcome, CodebaseToolAccess};
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
@@ -108,6 +109,11 @@ pub struct DelegationListener {
     /// feature flags at call time, so flipping the setting off stops writes
     /// from sessions that were launched while it was on.
     pub authoring: Arc<dyn ChatAuthoringAccess>,
+    /// Runs the read-only `codebase_*` queries bound to the caller's
+    /// connected working directory (token → `TokenEntry.working_dir`). The
+    /// impl owns project binding and capability enforcement; the listener
+    /// never forwards an agent-supplied project name.
+    pub codebase: Arc<dyn CodebaseToolAccess>,
 }
 
 impl DelegationListener {
@@ -121,6 +127,7 @@ impl DelegationListener {
         session_info: Arc<dyn SessionInfoAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
+        codebase: Arc<dyn CodebaseToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
             broker,
@@ -131,6 +138,7 @@ impl DelegationListener {
             session_info,
             tasks,
             authoring,
+            codebase,
         })
     }
 
@@ -343,6 +351,11 @@ impl DelegationListener {
             }
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
+            }
+            BrokerMessage::CodebaseQuery(req) => {
+                // Read-only index query; bounded by the adapter timeout. No
+                // peer-close race: a canceled call just drops the response.
+                codebase_response(self.process_codebase_query(req).await)?
             }
             BrokerMessage::Cancel(cancel) => {
                 self.process_cancel(cancel).await;
@@ -581,6 +594,23 @@ impl DelegationListener {
         self.authoring.create_work_task(ctx, req.spec).await
     }
 
+    /// Run one read-only Code Intelligence query for the `codebase_*` tools.
+    /// The query is bound to the token's connected working directory — the
+    /// caller never names a project. An invalid/revoked token degrades to an
+    /// `is_error` outcome (readable by the LLM) instead of a transport error,
+    /// matching the "never block, never leak" policy of the other read arms.
+    async fn process_codebase_query(
+        &self,
+        req: BrokerCodebaseQueryRequest,
+    ) -> CodebaseQueryOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return CodebaseQueryOutcome::error("invalid token");
+        };
+        self.codebase
+            .query(&entry.working_dir, &req.tool, req.arguments)
+            .await
+    }
+
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
         // 1. Token + parent_connection_id consistency check. Treat both as
         //    "canceled" since the LLM can't usefully react to either —
@@ -733,6 +763,17 @@ fn authoring_response(outcome: AuthoringOutcome) -> std::io::Result<BrokerRespon
     })
 }
 
+/// Serialize a [`CodebaseQueryOutcome`] into a [`BrokerResponse`] for the
+/// `CodebaseQuery` arm — the companion renders it into the `codebase_*` tool
+/// result (text + `isError` + structured outcome).
+fn codebase_response(outcome: CodebaseQueryOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
 /// The `declined` outcome — used when the token is invalid, the connection is
 /// gone, or the answer one-shot was dropped without a response. The LLM reads it
 /// as "the user didn't answer; proceed with your own judgment".
@@ -826,6 +867,7 @@ pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::codebase_tools::NullCodebaseTools;
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationConfig};
     use crate::acp::delegation::spawner::{mock::MockSpawner, ConnectionSpawner, SpawnerError};
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
@@ -1011,6 +1053,34 @@ mod tests {
 
     use tokio::sync::oneshot;
 
+    /// Records every `(working_dir, tool, arguments)` the listener hands down
+    /// and answers with a canned outcome, so codebase tests can assert the
+    /// token → working-dir binding without a real Code Intelligence runtime.
+    #[derive(Default)]
+    struct StubCodebase {
+        calls: tokio::sync::Mutex<Vec<(PathBuf, String, serde_json::Value)>>,
+        outcome: tokio::sync::Mutex<Option<CodebaseQueryOutcome>>,
+    }
+    #[async_trait]
+    impl CodebaseToolAccess for StubCodebase {
+        async fn query(
+            &self,
+            working_dir: &Path,
+            tool: &str,
+            arguments: serde_json::Value,
+        ) -> CodebaseQueryOutcome {
+            self.calls
+                .lock()
+                .await
+                .push((working_dir.to_path_buf(), tool.to_string(), arguments));
+            self.outcome.lock().await.clone().unwrap_or(CodebaseQueryOutcome {
+                text: "stubbed index answer".into(),
+                is_error: false,
+                project: Some("stub-project".into()),
+            })
+        }
+    }
+
     async fn make_broker(mock: Arc<MockSpawner>) -> Arc<DelegationBroker> {
         let broker = Arc::new(DelegationBroker::new(
             mock as Arc<dyn ConnectionSpawner>,
@@ -1043,6 +1113,7 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NullCodebaseTools),
         )
     }
 
@@ -1065,6 +1136,7 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NullCodebaseTools),
         )
     }
 
@@ -1088,6 +1160,7 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NullCodebaseTools),
         )
     }
 
@@ -1110,6 +1183,7 @@ mod tests {
             session_info,
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
+            Arc::new(NullCodebaseTools),
         )
     }
 
@@ -1134,6 +1208,31 @@ mod tests {
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             authoring,
+            Arc::new(NullCodebaseTools),
+        )
+    }
+
+    /// Build a listener whose codebase access is the given stub, so the
+    /// `codebase_*` tests can assert the token → working-dir binding and the
+    /// round-trip shape.
+    fn make_codebase_listener(
+        tokens: Arc<TokenRegistry>,
+        codebase: Arc<StubCodebase>,
+    ) -> Arc<DelegationListener> {
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(Some(1))),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+            codebase,
         )
     }
 
@@ -2050,6 +2149,75 @@ mod tests {
         let (ctx, spec) = calls.first().expect("impl was called");
         assert_eq!(ctx.conversation_id, None);
         assert_eq!(spec.title, "Fix the flake");
+    }
+
+    /// A valid token binds the query to the caller's connected working
+    /// directory and forwards tool + arguments verbatim — the impl (not the
+    /// wire arm) owns project binding and capability enforcement.
+    #[tokio::test]
+    async fn codebase_query_binds_caller_working_dir() {
+        let codebase = Arc::new(StubCodebase::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/repo/app"),
+                },
+            )
+            .await;
+        let listener = make_codebase_listener(tokens, codebase.clone());
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        let msg = BrokerMessage::CodebaseQuery(BrokerCodebaseQueryRequest {
+            token: "tok".into(),
+            tool: "codebase_search".into(),
+            arguments: json!({"query": "retry logic"}),
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+
+        assert_eq!(resp.outcome["text"], "stubbed index answer");
+        assert_eq!(resp.outcome["is_error"], false);
+        assert_eq!(resp.outcome["project"], "stub-project");
+        let calls = codebase.calls.lock().await;
+        let (dir, tool, args) = calls.first().expect("impl was called");
+        assert_eq!(dir, &PathBuf::from("/repo/app"));
+        assert_eq!(tool, "codebase_search");
+        assert_eq!(args, &json!({"query": "retry logic"}));
+    }
+
+    /// An invalid token is a readable `is_error` outcome, NOT a transport
+    /// failure — and the impl is never reached, so nothing runs on behalf of
+    /// an unauthenticated caller.
+    #[tokio::test]
+    async fn codebase_query_invalid_token_is_error_outcome() {
+        let codebase = Arc::new(StubCodebase::default());
+        // No token registered.
+        let tokens = Arc::new(TokenRegistry::default());
+        let listener = make_codebase_listener(tokens, codebase.clone());
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        let msg = BrokerMessage::CodebaseQuery(BrokerCodebaseQueryRequest {
+            token: "bogus".into(),
+            tool: "codebase_search".into(),
+            arguments: json!({}),
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+
+        assert_eq!(resp.outcome["is_error"], true);
+        assert!(resp.outcome["text"].as_str().unwrap().contains("invalid token"));
+        assert!(codebase.calls.lock().await.is_empty());
     }
 
     /// An invalid token is a soft refusal that NEVER reaches the impl — nothing

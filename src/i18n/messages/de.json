@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "Codebasis",
+      "unavailable": "Code-Intelligenz nicht verfügbar",
+      "unavailableHint": "Die Code-Intelligence-Laufzeit konnte in diesem Prozess nicht initialisiert werden. Starte die App neu; falls das Problem bleibt, prüfe die Protokolle.",
+      "adapterTitle": "Adapter-Binärdatei",
+      "adapterHint": "Bugrail verwaltet eine angeheftete codebase-memory-mcp-Binärdatei. Sie aktualisiert sich nie selbst; eine Neuinstallation prüft sie erneut.",
+      "notInstalled": "Nicht installiert",
+      "pinned": "angeheftete Version v{version}",
+      "install": "Installieren",
+      "source": {
+        "env_override": "Env-Override",
+        "preferences_override": "Einstellungs-Override",
+        "managed": "verwaltet"
+      },
+      "overrideLabel": "Binär-Override-Pfad",
+      "overridePlaceholder": "/pfad/zu/codebase-memory-mcp (leer = verwaltete Binärdatei)",
+      "overrideApply": "Anwenden",
+      "overrideClear": "Override löschen",
+      "overrideHint": "Overrides werden vor der Verwendung geprüft. Eine inkompatible Version wird abgelehnt — kein stiller Rückfall.",
+      "indexTitle": "Projektindex",
+      "indexHint": "Beim Aktivieren wird dieses Repository lokal indexiert. Agenten erhalten nur schreibgeschützte Abfragen, die an das aktuelle Projekt/den Worktree gebunden sind.",
+      "phase": {
+        "ready": "bereit",
+        "indexing": "indexiert",
+        "not_indexed": "nicht indexiert",
+        "unknown": "unbekannt"
+      },
+      "fileCount": "{count} Dateien indexiert",
+      "reindex": "Index neu aufbauen",
+      "openGraph": "Graph öffnen",
+      "graphOpened": "Graph-UI unter {url} geöffnet",
+      "recordsTitle": "Registrierte Indizes",
+      "recordsHint": "Basis-Repositories bleiben erhalten; WorkTask-Worktree-Indizes werden mit ihrem Worktree gelöscht.",
+      "noRecords": "Noch keine Indizes registriert.",
+      "worktreeRecord": "Worktree von WorkTask #{taskId} (temporär)",
+      "baseRecord": "Basis-Repository",
+      "enabledBadge": "aktiviert",
+      "disabledBadge": "deaktiviert"
+    }
   }
 }

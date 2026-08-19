@@ -193,6 +193,16 @@ async fn async_main() -> ExitCode {
         .await
         .expect("Failed to initialize database");
 
+    // Code Intelligence runtime: load the index registry so MCP injection can
+    // advertise the read-only `codebase_*` tools and the HTTP API can report
+    // state. Sync and side-effect-free beyond directory creation — no
+    // download, no probe, no spawn.
+    if let Err(e) = codeg_lib::code_intelligence::init_runtime(&data_dir) {
+        tracing::warn!(
+            "[code-intelligence][WARN] runtime init failed: {e}; the module stays disabled this session"
+        );
+    }
+
     // Logging phase 2: override the default level from the persisted
     // `logging.level` now that the DB is open. Phase 3 (wiring the emitter)
     // happens once AppState exists, below.
@@ -387,6 +397,7 @@ async fn async_main() -> ExitCode {
                 state.emitter.clone(),
                 chat_authoring_config.clone(),
             )),
+            Arc::new(codeg_lib::acp::codebase_tools::RuntimeCodebaseTools),
         );
         let socket = delegation_socket_path.clone();
         tokio::spawn(async move {

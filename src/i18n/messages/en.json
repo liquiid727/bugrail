@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "Codebase",
+      "unavailable": "Code Intelligence unavailable",
+      "unavailableHint": "The Code Intelligence runtime failed to initialize in this process. Restart the app; if it persists, check the logs.",
+      "adapterTitle": "Adapter binary",
+      "adapterHint": "Bugrail manages a pinned codebase-memory-mcp binary. It never self-updates; reinstall to re-verify.",
+      "notInstalled": "Not installed",
+      "pinned": "pinned v{version}",
+      "install": "Install",
+      "source": {
+        "env_override": "env override",
+        "preferences_override": "override",
+        "managed": "managed"
+      },
+      "overrideLabel": "Binary override path",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp (empty = managed binary)",
+      "overrideApply": "Apply",
+      "overrideClear": "Clear override",
+      "overrideHint": "Overrides are validated before use. An incompatible version is refused — there is no silent fallback.",
+      "indexTitle": "Project index",
+      "indexHint": "Enabling indexes this repository locally. Agents only get read-only queries bound to the current project/worktree.",
+      "phase": {
+        "ready": "ready",
+        "indexing": "indexing",
+        "not_indexed": "not indexed",
+        "unknown": "unknown"
+      },
+      "fileCount": "{count} files indexed",
+      "reindex": "Rebuild index",
+      "openGraph": "Open graph",
+      "graphOpened": "Graph UI opened at {url}",
+      "recordsTitle": "Registered indexes",
+      "recordsHint": "Base repositories persist; WorkTask worktree indexes are dropped with their worktree.",
+      "noRecords": "No indexes registered yet.",
+      "worktreeRecord": "WorkTask #{taskId} worktree (temporary)",
+      "baseRecord": "Base repository",
+      "enabledBadge": "enabled",
+      "disabledBadge": "disabled"
+    }
   }
 }

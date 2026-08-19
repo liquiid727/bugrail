@@ -115,6 +115,10 @@ pub struct TeamCatalog {
 pub struct ContextProviderConfig {
     pub id: String,
     pub kind: String,
+    /// Adapter implementation for adapter-backed kinds. For
+    /// `kind: code-intelligence` this must be `codebase-memory-mcp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]
@@ -127,11 +131,8 @@ pub struct ContextProviderConfig {
     pub capabilities: Vec<String>,
     // ── Memory Provider settings (BUGRAIL-SPECOS-017, `kind = "memory"`) ──
     // Every field below is ignored for non-memory kinds, so legacy provider
-    // documents deserialize unchanged.
-    /// Adapter key from the static allowlist. MVP01 knows exactly one:
-    /// `tencentdb-agent-memory-v3`.
-    #[serde(default)]
-    pub adapter: Option<String>,
+    // documents deserialize unchanged. `adapter` above is shared with the
+    // code-intelligence provider and selects `tencentdb-agent-memory-v3` here.
     /// Name of the environment variable holding the upstream service id
     /// (`x-tdai-service-id`). The value itself is resolved in the backend at
     /// call time only; it is never persisted or returned to clients.

@@ -223,6 +223,25 @@ pub struct BrokerCreateWorkTaskRequest {
     pub spec: NewWorkTaskSpec,
 }
 
+/// One read-only Code Intelligence query. Backs the nine `codebase_*` MCP
+/// tools exposed when the companion is launched with the `codebase` feature.
+/// Authenticated by the per-launch `token`; the listener resolves the
+/// caller's connected working directory from it and binds the query to the
+/// enabled index covering that directory — the agent never names a project.
+/// Errors come back as an outcome with `is_error: true` (not a transport
+/// failure) so the agent can react to "no index here" gracefully.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerCodebaseQueryRequest {
+    pub token: String,
+    /// Bugrail tool name (`codebase_search`, `codebase_trace`, …). The
+    /// listener maps it through the closed `CodeQuery` set and rejects
+    /// anything else, including every upstream write-side tool.
+    pub tool: String,
+    /// Raw MCP argument object. The listener clamps limits and overwrites
+    /// any `project` key with the bound project.
+    pub arguments: Value,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -241,6 +260,7 @@ pub enum BrokerMessage {
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    CodebaseQuery(BrokerCodebaseQueryRequest),
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -422,6 +442,16 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch one read-only `codebase_*` query and read back the serialized
+/// [`crate::acp::codebase_tools::CodebaseQueryOutcome`] (text + `is_error` +
+/// bound `project`).
+pub async fn client_codebase_round_trip(
+    socket_path: &str,
+    req: &BrokerCodebaseQueryRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::CodebaseQuery(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be

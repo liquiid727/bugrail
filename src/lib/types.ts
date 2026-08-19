@@ -1868,6 +1868,57 @@ export interface ContextOverview {
   activity: ContextActivityInfo[]
 }
 
+// --- Code Intelligence (mirror of src-tauri/src/code_intelligence + commands) ---
+
+export type CodeIntelBinarySource =
+  | "env_override"
+  | "preferences_override"
+  | "managed"
+
+export interface CodeIntelInstallState {
+  pinnedVersion: string
+  installed: boolean
+  binaryPath: string | null
+  source: CodeIntelBinarySource | null
+  reportedVersion: string | null
+  cacheRoot: string
+}
+
+export interface CodeIntelProjectRecord {
+  project: string
+  repoPath: string
+  worktree: boolean
+  taskId: number | null
+  enabled: boolean
+  indexedAt: string
+  lastSyncedAt: string | null
+  revision: string | null
+}
+
+export interface CodeIntelProjectStatus {
+  bound: boolean
+  project: string | null
+  repoPath: string | null
+  worktree: boolean
+  taskId: number | null
+  enabled: boolean
+  /** "ready", "indexing", "not_indexed", "unknown", … */
+  phase: string
+  revision: string | null
+  nodeCount: number | null
+  edgeCount: number | null
+  fileCount: number | null
+  indexedAt: string | null
+  lastSyncedAt: string | null
+}
+
+export interface CodeIntelState {
+  runtimeAvailable: boolean
+  install: CodeIntelInstallState | null
+  project: CodeIntelProjectStatus
+  records: CodeIntelProjectRecord[]
+}
+
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
 export type TokenUsageBucket = "day" | "week" | "month"

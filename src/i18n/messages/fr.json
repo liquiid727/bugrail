@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "Base de code",
+      "unavailable": "Intelligence du code indisponible",
+      "unavailableHint": "Le runtime d'intelligence du code n'a pas pu s'initialiser dans ce processus. Redémarrez l'application ; si le problème persiste, consultez les journaux.",
+      "adapterTitle": "Binaire de l'adaptateur",
+      "adapterHint": "Bugrail gère un binaire codebase-memory-mcp à version figée. Il ne se met jamais à jour seul ; réinstallez pour le revalider.",
+      "notInstalled": "Non installé",
+      "pinned": "version figée v{version}",
+      "install": "Installer",
+      "source": {
+        "env_override": "surcharge env",
+        "preferences_override": "surcharge préférences",
+        "managed": "géré"
+      },
+      "overrideLabel": "Chemin de surcharge du binaire",
+      "overridePlaceholder": "/chemin/vers/codebase-memory-mcp (vide = binaire géré)",
+      "overrideApply": "Appliquer",
+      "overrideClear": "Effacer la surcharge",
+      "overrideHint": "Les surcharges sont validées avant usage. Une version incompatible est refusée — aucun repli silencieux.",
+      "indexTitle": "Index du projet",
+      "indexHint": "L'activation indexe ce dépôt localement. Les agents n'obtiennent que des requêtes en lecture seule liées au projet/worktree courant.",
+      "phase": {
+        "ready": "prêt",
+        "indexing": "indexation",
+        "not_indexed": "non indexé",
+        "unknown": "inconnu"
+      },
+      "fileCount": "{count} fichiers indexés",
+      "reindex": "Reconstruire l'index",
+      "openGraph": "Ouvrir le graphe",
+      "graphOpened": "Interface du graphe ouverte sur {url}",
+      "recordsTitle": "Index enregistrés",
+      "recordsHint": "Les dépôts de base persistent ; les index de worktree WorkTask sont supprimés avec leur worktree.",
+      "noRecords": "Aucun index enregistré pour l'instant.",
+      "worktreeRecord": "Worktree de la WorkTask #{taskId} (temporaire)",
+      "baseRecord": "Dépôt de base",
+      "enabledBadge": "activé",
+      "disabledBadge": "désactivé"
+    }
   }
 }

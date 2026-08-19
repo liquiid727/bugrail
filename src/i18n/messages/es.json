@@ -5082,6 +5082,45 @@
     "maxTokens": "Max tokens",
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
-    "sourcesHint": "One per line: path | kind | required or optional"
+    "sourcesHint": "One per line: path | kind | required or optional",
+    "codebase": {
+      "title": "Base de código",
+      "unavailable": "Inteligencia de código no disponible",
+      "unavailableHint": "El runtime de inteligencia de código no se pudo inicializar en este proceso. Reinicia la aplicación; si persiste, revisa los registros.",
+      "adapterTitle": "Binario del adaptador",
+      "adapterHint": "Bugrail gestiona un binario codebase-memory-mcp de versión fija. Nunca se autoactualiza; reinstala para volver a verificarlo.",
+      "notInstalled": "No instalado",
+      "pinned": "versión fija v{version}",
+      "install": "Instalar",
+      "source": {
+        "env_override": "anulación por env",
+        "preferences_override": "anulación por preferencias",
+        "managed": "gestionado"
+      },
+      "overrideLabel": "Ruta de anulación del binario",
+      "overridePlaceholder": "/path/to/codebase-memory-mcp (vacío = binario gestionado)",
+      "overrideApply": "Aplicar",
+      "overrideClear": "Quitar anulación",
+      "overrideHint": "Las anulaciones se validan antes de usarse. Una versión incompatible se rechaza; no hay respaldo silencioso.",
+      "indexTitle": "Índice del proyecto",
+      "indexHint": "Al activarlo se indexa este repositorio localmente. Los agentes solo obtienen consultas de solo lectura vinculadas al proyecto/worktree actual.",
+      "phase": {
+        "ready": "listo",
+        "indexing": "indexando",
+        "not_indexed": "sin indexar",
+        "unknown": "desconocido"
+      },
+      "fileCount": "{count} archivos indexados",
+      "reindex": "Reconstruir índice",
+      "openGraph": "Abrir grafo",
+      "graphOpened": "Interfaz del grafo abierta en {url}",
+      "recordsTitle": "Índices registrados",
+      "recordsHint": "Los repositorios base persisten; los índices de worktree de WorkTask se eliminan junto con su worktree.",
+      "noRecords": "Aún no hay índices registrados.",
+      "worktreeRecord": "Worktree del WorkTask #{taskId} (temporal)",
+      "baseRecord": "Repositorio base",
+      "enabledBadge": "activado",
+      "disabledBadge": "desactivado"
+    }
   }
 }

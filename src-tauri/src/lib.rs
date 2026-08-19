@@ -19,6 +19,7 @@ pub mod app_state;
 pub mod automation;
 pub mod backgrounds;
 pub mod chat_channel;
+pub mod code_intelligence;
 pub mod commands;
 pub mod context;
 pub mod db;
@@ -37,10 +38,9 @@ pub mod paths;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
 pub mod pets;
-pub mod product;
-#[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
+pub mod product;
 pub mod specos_control;
 pub mod supervise;
 mod terminal;
@@ -66,24 +66,20 @@ mod tauri_app {
     use crate::acp::manager::ConnectionManager;
     use crate::chat_channel::manager::ChatChannelManager;
     use crate::commands::{
-        acp as acp_commands, app_update as app_update_commands,
-        automation as automation_commands, background as background_commands, backup,
-        chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
-        conversations,
-        custom_skills as custom_skills_commands, delegation as delegation_commands,
+        acp as acp_commands, app_update as app_update_commands, automation as automation_commands,
+        background as background_commands, backup, chat_authoring as chat_authoring_commands,
+        chat_channel as chat_channel_commands, code_intelligence as code_intelligence_commands,
+        conversations, custom_skills as custom_skills_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, office_tools as office_tools_commands,
-        folders, logging as logging_commands, mcp as mcp_commands,
-        model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
+        folder_links, folders, logging as logging_commands, mcp as mcp_commands,
+        model_provider as model_provider_commands, notification,
+        office_tools as office_tools_commands, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
-        remote_proxy as remote_proxy_commands,
-        remote_workspace as remote_workspace_commands, science as science_commands,
-        session_info as session_info_commands,
-        specos_control as specos_control_commands,
-        system_settings, terminal as terminal_commands,
-        token_usage as token_usage_commands,
-        version_control, windows, work_task as work_task_commands,
-        workspace_state as workspace_state_commands,
+        remote_proxy as remote_proxy_commands, remote_workspace as remote_workspace_commands,
+        science as science_commands, session_info as session_info_commands,
+        specos_control as specos_control_commands, system_settings, terminal as terminal_commands,
+        token_usage as token_usage_commands, version_control, windows,
+        work_task as work_task_commands, workspace_state as workspace_state_commands,
     };
     use crate::terminal::manager::TerminalManager;
     use crate::{db, git_credential, network, paths, process, web};
@@ -325,6 +321,15 @@ mod tauri_app {
                 .map_err(|e| e.to_string())?;
                 app.manage(database);
 
+                // Code Intelligence runtime: load the index registry so MCP
+                // injection can advertise the read-only `codebase_*` tools and
+                // the Context page can report state. Sync and side-effect-free
+                // beyond directory creation — no download, no probe, no spawn.
+                if let Err(e) = crate::code_intelligence::init_runtime(&effective_data_dir) {
+                    tracing::warn!(
+                        "[code-intelligence][WARN] runtime init failed: {e}; the module stays disabled this session"
+                    );
+                }
                 // Shared Memory service (BUGRAIL-SPECOS-017): Adapter
                 // registry + health cache + capture outbox. Shared by the
                 // WorkTask engine, the embedded web server's AppState and
@@ -683,6 +688,7 @@ mod tauri_app {
                                 chat_authoring_config.clone(),
                             ),
                         ),
+                        std::sync::Arc::new(crate::acp::codebase_tools::RuntimeCodebaseTools),
                     );
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = listener.run(socket_path).await {
@@ -1399,6 +1405,12 @@ mod tauri_app {
                 specos_control_commands::specos_work_task_handoff_save,
                 specos_control_commands::specos_work_task_integration_plan,
                 specos_control_commands::specos_work_task_integration_refresh,
+                code_intelligence_commands::code_intelligence_get_state,
+                code_intelligence_commands::code_intelligence_install,
+                code_intelligence_commands::code_intelligence_set_enabled,
+                code_intelligence_commands::code_intelligence_reindex,
+                code_intelligence_commands::code_intelligence_set_binary_override,
+                code_intelligence_commands::code_intelligence_open_graph,
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,
