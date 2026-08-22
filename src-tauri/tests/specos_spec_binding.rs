@@ -22,7 +22,7 @@ use codeg_lib::db::entities::work_task;
 use codeg_lib::db::service::work_task_service;
 use codeg_lib::db::test_helpers::fresh_in_memory_db;
 use codeg_lib::db::AppDatabase;
-use codeg_lib::models::{WorkTaskDraft, WorkTaskStatus};
+use codeg_lib::models::{WorkTaskDraft, WorkTaskGateStatus, WorkTaskStatus};
 use codeg_lib::web::router::build_router;
 use codeg_lib::web::shutdown::ShutdownSignal;
 use sea_orm::sea_query::Expr;
@@ -60,6 +60,7 @@ async fn seed_task(db: &AppDatabase, project_root: &str) -> i32 {
             "display_text": "do the thing",
             "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
         }),
+        task_kind: Default::default(),
     };
     work_task_service::create(&db.conn, draft)
         .await
@@ -71,7 +72,12 @@ async fn seed_task(db: &AppDatabase, project_root: &str) -> i32 {
 /// returned temp dirs alive so the on-disk project root / static dir persist.
 async fn build_server(
     db: AppDatabase,
-) -> (TestServer, Arc<AppState>, tempfile::TempDir, tempfile::TempDir) {
+) -> (
+    TestServer,
+    Arc<AppState>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
     let data_dir = tempfile::tempdir().expect("data dir");
     let static_dir = tempfile::tempdir().expect("static dir");
     let state = Arc::new(AppState::new_for_test(db, data_dir.path().to_path_buf()));
@@ -164,7 +170,11 @@ async fn assert_spec_invalid(
     let events = work_task_service::list_events(&state.db.conn, task_id, 500)
         .await
         .expect("list events");
-    assert_eq!(events.len(), events_before, "no event appended on rejection");
+    assert_eq!(
+        events.len(),
+        events_before,
+        "no event appended on rejection"
+    );
     let contract = work_task_service::get_contract(&state.db.conn, task_id)
         .await
         .expect("get contract");
@@ -190,7 +200,10 @@ async fn set_status(db: &sea_orm::DatabaseConnection, task_id: i32, status: Work
             work_task::Column::Status,
             Expr::value(work_task_service::status_str(status)),
         )
-        .col_expr(work_task::Column::UpdatedAt, Expr::value(chrono::Utc::now()))
+        .col_expr(
+            work_task::Column::UpdatedAt,
+            Expr::value(chrono::Utc::now()),
+        )
         .filter(work_task::Column::Id.eq(task_id))
         .exec(db)
         .await
@@ -248,7 +261,10 @@ async fn t01_t02_preview_then_bind_stores_exact_metadata_and_roundtrips() {
     assert_eq!(stored_acs.len(), 1, "only the selected AC is snapshotted");
     assert_eq!(stored_acs[0]["id"], "BUGRAIL-SPECOS-001.AC01");
     assert_eq!(stored_acs[0]["title"], "AC01");
-    assert!(stored_acs[0]["text"].as_str().unwrap().contains("exact metadata"));
+    assert!(stored_acs[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("exact metadata"));
 
     // The bind event was recorded in the same transaction.
     let bound_events = bind_event_count(&state, task_id).await;
@@ -347,8 +363,8 @@ async fn t05_missing_or_oversized_spec_is_rejected_before_mutation() {
     assert_spec_invalid(&resp, &state, task_id, events_before).await;
 
     // Over 1 MiB.
-    let big = "---\nid: BIG\nversion: \"1\"\n---\n# x\n".to_string()
-        + &"# padding\n".repeat(120_000);
+    let big =
+        "---\nid: BIG\nversion: \"1\"\n---\n# x\n".to_string() + &"# padding\n".repeat(120_000);
     assert!(big.len() > 1024 * 1024, "test fixture must exceed 1 MiB");
     write_spec(project.path(), ".features/big.md", &big);
     let resp = preview(&server, task_id, ".features/big.md").await;
@@ -462,12 +478,7 @@ async fn t08_unknown_acceptance_criterion_is_rejected() {
     let resp = bind(
         &server,
         task_id,
-        draft_body(
-            SPEC_PATH,
-            &hash,
-            &["BUGRAIL-SPECOS-001.AC999"],
-            &gates,
-        ),
+        draft_body(SPEC_PATH, &hash, &["BUGRAIL-SPECOS-001.AC999"], &gates),
     )
     .await;
     assert_spec_invalid(&resp, &state, task_id, events_before).await;
@@ -515,8 +526,17 @@ async fn t09_gate_policy_limits_are_rejected() {
     assert_spec_invalid(&resp, &state, task_id, events_before).await;
 
     // More than 32 gates.
-    let too_many = gate_policy((0..33).map(|i| preflight_gate(&format!("g{i}"), true, false)).collect());
-    let resp = bind(&server, task_id, draft_body(SPEC_PATH, &hash, &[ac], &too_many)).await;
+    let too_many = gate_policy(
+        (0..33)
+            .map(|i| preflight_gate(&format!("g{i}"), true, false))
+            .collect(),
+    );
+    let resp = bind(
+        &server,
+        task_id,
+        draft_body(SPEC_PATH, &hash, &[ac], &too_many),
+    )
+    .await;
     assert_spec_invalid(&resp, &state, task_id, events_before).await;
 
     // Oversized policy: 32 gates each with a long id pushes past 32 KiB.
@@ -525,7 +545,12 @@ async fn t09_gate_policy_limits_are_rejected() {
             .map(|i| preflight_gate(&format!("g{i}{}", "x".repeat(2000)), true, false))
             .collect(),
     );
-    let resp = bind(&server, task_id, draft_body(SPEC_PATH, &hash, &[ac], &oversized)).await;
+    let resp = bind(
+        &server,
+        task_id,
+        draft_body(SPEC_PATH, &hash, &[ac], &oversized),
+    )
+    .await;
     assert_spec_invalid(&resp, &state, task_id, events_before).await;
 
     // Oversized AC snapshot: one criterion text over 64 KiB, selected at bind.
@@ -536,7 +561,11 @@ async fn t09_gate_policy_limits_are_rejected() {
     );
     write_spec(project.path(), ".features/big-ac.md", &giant_ac);
     let resp = preview(&server, task_id, ".features/big-ac.md").await;
-    assert_eq!(resp.status_code(), 200, "preview must accept a sub-1MiB spec");
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "preview must accept a sub-1MiB spec"
+    );
     let big_hash = resp.json::<Value>()["source_spec_hash"]
         .as_str()
         .unwrap()
@@ -553,9 +582,18 @@ async fn t09_gate_policy_limits_are_rejected() {
     // Unsupported gate type fails at wire deserialization (422 from axum's Json
     // rejection — before the core runs, so nothing is written).
     let unsupported = json!({ "gates": [{ "id": "x", "type": "magic", "required": true, "reusable": false, "allow_waiver": false }] });
-    let resp = bind(&server, task_id, draft_body(SPEC_PATH, &hash, &[ac], &unsupported)).await;
+    let resp = bind(
+        &server,
+        task_id,
+        draft_body(SPEC_PATH, &hash, &[ac], &unsupported),
+    )
+    .await;
     assert_eq!(resp.status_code(), 422, "body={}", resp.text());
-    assert_eq!(bind_event_count(&state, task_id).await, 0, "no event on deserialize failure");
+    assert_eq!(
+        bind_event_count(&state, task_id).await,
+        0,
+        "no event on deserialize failure"
+    );
     let contract = work_task_service::get_contract(&state.db.conn, task_id)
         .await
         .expect("get contract");
@@ -590,36 +628,32 @@ async fn t25_staleness_detects_spec_change_after_binding() {
     assert_eq!(resp.status_code(), 200, "body={}", resp.text());
 
     // Unchanged file → not stale.
-    assert!(
-        !work_task_spec_staleness_core(&state.db, task_id)
-            .await
-            .expect("staleness")
-    );
+    assert!(!work_task_spec_staleness_core(&state.db, task_id)
+        .await
+        .expect("staleness"));
 
     // Author edits the spec → stale.
-    write_spec(project.path(), SPEC_PATH, &SPEC_BODY.replace("exact metadata", "new metadata"));
-    assert!(
-        work_task_spec_staleness_core(&state.db, task_id)
-            .await
-            .expect("staleness")
+    write_spec(
+        project.path(),
+        SPEC_PATH,
+        &SPEC_BODY.replace("exact metadata", "new metadata"),
     );
+    assert!(work_task_spec_staleness_core(&state.db, task_id)
+        .await
+        .expect("staleness"));
 
     // Restore the exact bytes → not stale again.
     write_spec(project.path(), SPEC_PATH, SPEC_BODY);
-    assert!(
-        !work_task_spec_staleness_core(&state.db, task_id)
-            .await
-            .expect("staleness")
-    );
+    assert!(!work_task_spec_staleness_core(&state.db, task_id)
+        .await
+        .expect("staleness"));
 
     // The file goes away → stale (merge gating must never proceed on an
     // unverifiable reference).
     std::fs::remove_file(project.path().join(SPEC_PATH)).expect("remove spec");
-    assert!(
-        work_task_spec_staleness_core(&state.db, task_id)
-            .await
-            .expect("staleness")
-    );
+    assert!(work_task_spec_staleness_core(&state.db, task_id)
+        .await
+        .expect("staleness"));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -733,4 +767,207 @@ async fn t26_rebind_in_review_succeeds_forbidden_states_reject_without_mutation(
         .expect("rebound contract");
     assert_eq!(contract.source_spec_hash, hash2);
     assert!(contract.updated_at >= contract.created_at);
+}
+
+// T14 / T15 — the public transport exposes only policy-bound human decisions;
+// engine-owned results and forbidden waivers cannot be forged by a client.
+#[tokio::test]
+async fn t14_t15_human_gate_transport_enforces_actor_policy_and_reason() {
+    let db = fresh_in_memory_db().await;
+    let project = tempfile::tempdir().expect("project root");
+    write_spec(project.path(), SPEC_PATH, SPEC_BODY);
+    let task_id = seed_task(&db, project.path().to_str().unwrap()).await;
+    let (server, _state, _data, _static) = build_server(db).await;
+
+    let resp = preview(&server, task_id, SPEC_PATH).await;
+    let hash = resp.json::<Value>()["source_spec_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let gates = gate_policy(vec![
+        preflight_gate("preflight", true, false),
+        human_approval_gate("human", false),
+    ]);
+    let resp = bind(
+        &server,
+        task_id,
+        draft_body(SPEC_PATH, &hash, &["BUGRAIL-SPECOS-001.AC01"], &gates),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body={}", resp.text());
+
+    let decide = |gate_id: &str, decision: &str, reason: Option<&str>| {
+        server
+            .post("/api/work_task_gate_human_decide")
+            .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .json(&json!({
+                "taskId": task_id,
+                "gateId": gate_id,
+                "decision": decision,
+                "reason": reason,
+            }))
+    };
+
+    let resp = decide("preflight", "approve", Some("forged agent pass")).await;
+    assert_eq!(resp.status_code(), 400, "body={}", resp.text());
+    let resp = decide("preflight", "waive", Some("not allowed")).await;
+    assert_eq!(resp.status_code(), 403, "body={}", resp.text());
+    let resp = decide("human", "approve", Some("   ")).await;
+    assert_eq!(resp.status_code(), 400, "body={}", resp.text());
+
+    let resp = decide("human", "approve", Some("reviewed by owner")).await;
+    assert_eq!(resp.status_code(), 200, "body={}", resp.text());
+    let result: Value = resp.json();
+    assert_eq!(result["actor"], "user");
+    assert_eq!(result["status"], "passed");
+    assert_eq!(result["reason"], "reviewed by owner");
+
+    let resp = decide("human", "waive", Some("accepted residual risk")).await;
+    assert_eq!(resp.status_code(), 200, "body={}", resp.text());
+    let waived: Value = resp.json();
+    assert_eq!(waived["actor"], "user");
+    assert_eq!(waived["status"], "waived");
+    assert_eq!(waived["reason"], "accepted residual risk");
+    assert!(waived["started_at"].is_string());
+    assert!(waived["finished_at"].is_string());
+
+    let resp = server
+        .post("/api/work_task_gate_list")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "taskId": task_id }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body={}", resp.text());
+    let rows: Value = resp.json();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.last().unwrap()["status"], "waived");
+    assert_eq!(rows.last().unwrap()["actor"], "user");
+    assert_eq!(rows.last().unwrap()["reason"], "accepted residual risk");
+
+    let resp = server
+        .post("/api/work_task_gate_record")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({
+            "taskId": task_id,
+            "runSeq": 0,
+            "gateId": "preflight",
+            "gateType": "preflight",
+            "status": "passed",
+            "required": true,
+            "reusable": false,
+            "actor": "agent",
+            "evidence": { "summary": "forged" },
+            "reason": "forged public writer"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 501, "no generic gate-record route");
+    let resp = server
+        .post("/api/work_task_gate_list")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "taskId": task_id }))
+        .await;
+    let rows: Value = resp.json();
+    assert_eq!(
+        rows.as_array().unwrap().len(),
+        2,
+        "forged route wrote no row"
+    );
+}
+
+// T16 and the status branches of T17-T19 — every ineligible gate state blocks
+// the merge path before engine dispatch and leaves the reviewed task untouched.
+// The T17 missing-producer branch and T20 real unchanged-worktree cleanup need
+// engine-level fixtures, so this test intentionally does not claim them.
+#[tokio::test]
+async fn merge_rejects_missing_running_failed_and_blocked_gate_states() {
+    let db = fresh_in_memory_db().await;
+    let project = tempfile::tempdir().expect("project root");
+    write_spec(project.path(), SPEC_PATH, SPEC_BODY);
+    let task_id = seed_task(&db, project.path().to_str().unwrap()).await;
+    let (server, state, _data, _static) = build_server(db).await;
+
+    let resp = preview(&server, task_id, SPEC_PATH).await;
+    let hash = resp.json::<Value>()["source_spec_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let gates = gate_policy(vec![preflight_gate("preflight", true, false)]);
+    let resp = bind(
+        &server,
+        task_id,
+        draft_body(SPEC_PATH, &hash, &["BUGRAIL-SPECOS-001.AC01"], &gates),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body={}", resp.text());
+    set_status(&state.db.conn, task_id, WorkTaskStatus::Review).await;
+
+    for gate_status in [
+        None,
+        Some(WorkTaskGateStatus::Running),
+        Some(WorkTaskGateStatus::Failed),
+        Some(WorkTaskGateStatus::Blocked),
+    ] {
+        if let Some(status) = gate_status {
+            let evidence = (status == WorkTaskGateStatus::Failed)
+                .then(|| json!({ "summary": "preflight command failed" }));
+            work_task_service::record_preflight_gates(
+                &state.db.conn,
+                task_id,
+                0,
+                status,
+                (status != WorkTaskGateStatus::Running).then(|| "evidence failed".into()),
+                evidence,
+            )
+            .await
+            .expect("record engine-owned gate result");
+        }
+
+        let resp = server
+            .post("/api/work_task_merge")
+            .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .json(&json!({
+                "id": task_id,
+                "message": null,
+                "deleteWorktree": false
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 500, "body={}", resp.text());
+        let body: Value = resp.json();
+        assert_eq!(body["i18n_key"], "workTask.qualityGate.unmet");
+        assert_eq!(body["i18n_params"]["gates"], "preflight");
+        let task = work_task_service::get_model(&state.db.conn, task_id)
+            .await
+            .expect("task remains");
+        assert_eq!(task.status, WorkTaskStatus::Review);
+
+        if gate_status == Some(WorkTaskGateStatus::Failed) {
+            let attempts = work_task_service::list_gate_results(&state.db.conn, task_id, Some(0))
+                .await
+                .expect("list persisted gate evidence");
+            let failed = attempts.last().expect("failed attempt persisted");
+            assert_eq!(failed.status, "failed");
+            let evidence: Value = serde_json::from_str(
+                failed
+                    .evidence
+                    .as_deref()
+                    .expect("failed evidence persisted"),
+            )
+            .expect("failed evidence is valid JSON");
+            assert_eq!(
+                evidence["summary"].as_str(),
+                Some("preflight command failed")
+            );
+        }
+    }
+
+    let events = work_task_service::list_events(&state.db.conn, task_id, 100)
+        .await
+        .expect("list events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "quality_gate_blocked")
+            .count(),
+        4
+    );
 }

@@ -39,3 +39,10 @@ Cover ready/blocked/failed parents, parallel claims, restart, accessible list fa
 - Result: **not verified** at first run (`t05_concurrency_race_cycle` failed; start did not check readiness). Follow-up 2026-08-13: dependency writes are serialized, user/auto claims return `workTask.dependency.unmet`, Feature Spec 004 approved for T01-T06. Re-run the Test Spec before flipping this Issue.
 - Status remains `pending_verification`.
 
+- Date: `2026-08-21`
+- Evidence: `tests/results/2026-08-21-specos-004-verification.md`
+- Result: T01-T06 are now green, including the direct manual-start regression
+  and 004 traceability-panel UI test.
+- Status remains `pending_verification`: repository-level Rust and TypeScript
+  verification is blocked by out-of-scope Memory 017 and 005 Integration UI
+  failures, so the Test Spec's required evidence is not fully green.

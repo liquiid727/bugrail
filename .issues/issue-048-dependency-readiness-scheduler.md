@@ -30,3 +30,12 @@ Validate self/duplicate/cross-folder/cycle cases, concurrency and explicit block
 - Record exact commands and durable evidence before changing this Issue to
   verified; implementation status alone does not satisfy the source Test Spec.
 
+## Verification Record
+
+- Date: `2026-08-21`
+- Evidence: `tests/results/2026-08-21-specos-004-verification.md`
+- Result: all approved 004 scenarios pass, including concurrent reverse-edge
+  rejection and direct `TaskEngine::start` readiness enforcement.
+- Status remains `implemented_pending_verification`: the required repository
+  Rust suite currently fails in out-of-scope Memory 017 coverage and
+  `pnpm exec tsc --noEmit` fails in out-of-scope 005 Integration UI i18n work.

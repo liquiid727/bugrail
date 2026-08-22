@@ -1,12 +1,12 @@
 ---
 testSpecId: "BUGRAIL-SPECOS-001.test"
 testSpecVersion: "0.3"
-status: draft
+status: approved
 sourceSpec: ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md"
 sourceSpecId: "BUGRAIL-SPECOS-001"
 sourceSpecVersion: "0.3"
-sourceSpecHash: "81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d"
-approvalEvidence: "pending-independent-review"
+sourceSpecHash: "79160488f65ae762decaa6db4987c15a783f61c886588c1e9157fc1bb40ab0d0"
+approvalEvidence: "explicit-user-approval-2026-08-23"
 riskTier: P1
 ---
 

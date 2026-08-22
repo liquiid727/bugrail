@@ -1,7 +1,8 @@
 # ADR-001: Embed SpecOS Delivery Control In WorkTask
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-09
+- Accepted: 2026-08-23 (explicit user approval)
 - Design: `design/specos-control-plane-design.md`
 
 ## Context
@@ -52,4 +53,3 @@ SQLite records, event handling, and runtime coordination.
 
 Rejected. Git-tracked Feature/Test Specs need human review and exact revision
 binding. SQLite stores live references and evidence, not a second editable copy.
-

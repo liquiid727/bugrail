@@ -2,7 +2,7 @@
 id: BUGRAIL-SPECOS-001
 version: "0.3"
 title: "Spec-Linked WorkTask Quality"
-status: draft
+status: approved
 changeType: work-task-deepening
 prd: ".prd/prd-specos-delivery-control.md"
 slicePrd: ".prd/prd-specos-work-task-quality.md"
@@ -431,11 +431,11 @@ Implementation Issues live under `.issues/` and carry this Spec's exact hash.
 
 ## 12. Definition Of Ready
 
-- [ ] ADR-001 is accepted.
+- [x] ADR-001 is accepted.
 - [x] Rebind-state policy is fixed to `todo/review/failed/canceled`.
-- [ ] Feature Spec `0.3` is approved at an exact SHA-256.
-- [ ] Matching Test Spec is independently approved at the same source hash.
-- [ ] Implementation and verification Issues reference that hash.
+- [x] Feature Spec `0.3` is approved at an exact SHA-256.
+- [x] Matching Test Spec is independently approved at the same source hash.
+- [x] Implementation and verification Issues reference that hash.
 
 ## 13. Definition Of Done
 

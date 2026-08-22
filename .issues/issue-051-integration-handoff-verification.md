@@ -39,3 +39,14 @@ Cover missing/stale handoff, conflicts, source heads, gates, legacy summaries, d
 - Result: **not verified** at first run (T03-T05 missing). Follow-up 2026-08-13: `integration_plan` / `refresh` / containment-gated `merge_landed` plus Git oracles for T03-T05. Feature Spec 005 approved for T01-T06. Re-run the Test Spec before flipping this Issue.
 - Status remains `pending_verification`.
 
+### 2026-08-21 follow-up
+
+- Evidence: `tests/results/2026-08-21-specos-005-verification.md` at
+  repository HEAD `3c7240c08184c28658330f15e5bcd08d35ee8c4d`.
+- Result: T01-T06 command-core/SQLite/Git oracles and targeted integration UI
+  transport states pass. Source direct completion, merge, cleanup, and
+  auto-merge are now blocked while a live integration reserves the source;
+  conflict inspection prefers the integration Worktree.
+- Status remains `pending_verification`: real TaskEngine conflict
+  resolution/retry, restart/idempotency, Axum/Tauri parity, and the full UI
+  interaction contract have not been independently demonstrated.

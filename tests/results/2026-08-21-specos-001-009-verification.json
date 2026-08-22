@@ -1,0 +1,57 @@
+{
+  "recordVersion": 1,
+  "date": "2026-08-21",
+  "verifier": "Fairy",
+  "standard": "specos-test-standard/v1",
+  "workspace": {
+    "commit": "3c7240c08184c28658330f15e5bcd08d35ee8c4d",
+    "branch": "main",
+    "dirtyBeforeVerification": true,
+    "implementationModified": false
+  },
+  "releaseCandidate": { "decision": "deny" },
+  "features": [
+    { "id": "BUGRAIL-SPECOS-001", "version": "0.3", "featureStatus": "draft", "testStatus": "draft", "featureSha256": "81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d", "testSha256": "35584e8aca20905c4a6c99fc70823dd7eb0c0119cfa36b9a466b5832d6d772ae", "result": "fail" },
+    { "id": "BUGRAIL-SPECOS-002", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "f9342aa89f379719d89fc8bcbcc7e612208652ec42fa9dd464c671185587fee9", "testSha256": "dc82ce17bb3a21b81302207d3bc9c5dcdfd21cb0865a608bead539768b61318a", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-003", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "6dcbc16b16a05b5d98fcadd7393098558d2fbe2d334d40af4ed4672b5df38009", "testSha256": "89e5bb0dbeb0cf5b9087a2794d68d5deeb2a5f725d4d3ea8643f9f95ab4bfe92", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-004", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "81ee40fe121cef77cb45120768e949a06e5883ea5b83cb64f6106a29fb8a9d4d", "testSha256": "8deae207f7db73d44bd36f96fe92ab5ecc62df67254fba9a13224a93977e4b05", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-005", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "1d5ff5e900247259bab0b2ad292246fb92dbcccc7e089b5295425ecab2c47678", "testSha256": "7ed765c13a5c3de7c40347221162ef2408ba3058a7e642950e06ce603be7e99d", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-006", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "9a97e6eaecf1248ec4494b17f484f687628d13d27e8bda68d164e6e9755afabb", "testSha256": "dcd67c95887899be4ef0658ea9e4dc83c293c20abe63550794ce02764c869904", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-007", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "fc10e29a5c2be849a1573875aee7b3fb73f0292dcbfb5e23623c88318f6d669f", "testSha256": "15e2f3c939fd0ef0847d68b6e074e6cbddb72b1a98f00e0a50660f93d0edb6cb", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-008", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "244f55f97115b3b067dc7fc031ee55bdf26879f30dcbc3a2d3b5ade24174046d", "testSha256": "c437b5948e6ab4bc18fde98120011be4460153003d6098d9286f2e396f1c3412", "result": "partial" },
+    { "id": "BUGRAIL-SPECOS-009", "version": "0.2", "featureStatus": "approved", "testStatus": "approved", "featureSha256": "0eb4d34c5db0677a58fafff40c9c963359455ea3d1750d4bb52fc53e707913a7", "testSha256": "4ae27c01c675108cfeaa843a20109178a2e04cb6ed52104067bb919a0cc909c8", "result": "fail" }
+  ],
+  "commands": [
+    { "command": "cargo test --features test-utils --test specos_agent_team_context -- --test-threads=1", "exit": 0, "result": "47 passed" },
+    { "command": "cargo test --features test-utils --test specos_migration -- --test-threads=1", "exit": 0, "result": "4 passed" },
+    { "command": "cargo test --features test-utils --test specos_spec_binding -- --test-threads=1", "exit": 0, "result": "10 passed; real Axum router" },
+    { "command": "cargo test --no-default-features --bin codeg-server --lib", "exit": 0, "result": "2707 passed, 1 ignored" },
+    { "command": "cargo test --features test-utils", "exit": 101, "result": "memory_capture_outbox legacy_project_without_memory_provider_stages_nothing: expected 0, observed 1" },
+    { "command": "cargo check (desktop/server/MCP variants)", "exit": 0, "result": "passed" },
+    { "command": "cargo clippy (desktop/server/MCP variants) -- -D warnings", "exit": 0, "result": "passed" },
+    { "command": "pnpm test", "exit": 0, "result": "318 files, 4216 tests passed" },
+    { "command": "pnpm exec tsc --noEmit", "exit": 0, "result": "passed" },
+    { "command": "pnpm build", "exit": 0, "result": "passed" },
+    { "command": "pnpm lint", "exit": null, "result": "stopped after 120s without output; inconclusive" }
+  ],
+  "browser": {
+    "tool": "ego-browser",
+    "runtime": "temporary codeg-server plus production out directory",
+    "observed": ["authenticated Context empty state", "optional Provider degraded state", "375x812 has no horizontal overflow"],
+    "failure": "All five Context tabs rendered tabindex=-1, including selected tab; keyboard Tab cannot reach the tab strip.",
+    "stateCoverage": { "unit": ["loading", "empty", "error", "stale"], "liveBrowser": ["empty", "degraded", "responsive"], "missingLiveBrowser": ["loading", "error", "stale", "blocked"] }
+  },
+  "locales": { "catalogCount": 10, "baseline": "en.json", "flattenedKeyCount": 4397, "missingKeys": 0, "extraKeys": 0 },
+  "issues": [
+    { "id": "issue-004", "result": "fail", "statusAction": "retain implemented_pending_verification" },
+    { "id": "issue-005", "result": "fail", "statusAction": "retain pending_verification" },
+    { "id": "issue-045", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-047", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-049", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-051", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-053", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-055", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-058", "result": "partial", "statusAction": "retain pending_verification" },
+    { "id": "issue-060", "result": "fail", "statusAction": "retain pending_verification" }
+  ]
+}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   specosWorkTaskDependencies: vi.fn(),
   specosWorkTaskHandoffGet: vi.fn(),
   specosWorkTaskHandoffSave: vi.fn(),
+  specosWorkTaskIntegrationPlan: vi.fn(),
+  specosWorkTaskIntegrationRefresh: vi.fn(),
   specosWorkTaskRuns: vi.fn(),
   workTaskContractBind: vi.fn(),
   workTaskContractGet: vi.fn(),
@@ -26,11 +28,12 @@ vi.mock("sonner", () => ({
 
 import { TaskTraceabilityPanel } from "./task-traceability-panel"
 
-function task(): WorkTask {
+function task(taskKind?: WorkTask["task_kind"]): WorkTask {
   return {
     id: 11,
     folder_id: 1,
     title: "Verify handoff",
+    task_kind: taskKind,
     config: {
       display_text: "Verify handoff",
       prompt_blocks: [],
@@ -56,6 +59,7 @@ function task(): WorkTask {
     merge_commit: null,
     preflight: null,
     archived_at: null,
+    scheduled_at: null,
     created_at: "2026-08-13T00:00:00Z",
     updated_at: "2026-08-13T00:00:00Z",
     started_at: null,
@@ -64,10 +68,10 @@ function task(): WorkTask {
   }
 }
 
-function renderPanel() {
+function renderPanel(taskKind?: WorkTask["task_kind"]) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <TaskTraceabilityPanel task={task()} />
+      <TaskTraceabilityPanel task={task(taskKind)} />
     </NextIntlClientProvider>
   )
 }
@@ -81,6 +85,12 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
     api.specosWorkTaskRuns.mockResolvedValue([])
     api.specosWorkTaskDependencies.mockResolvedValue([])
     api.specosWorkTaskHandoffGet.mockResolvedValue(null)
+    api.specosWorkTaskIntegrationPlan.mockResolvedValue({
+      taskId: 11,
+      status: "no_sources",
+      sources: [],
+      conflicts: [],
+    })
   })
 
   it("shows loading then empty run/context/handoff states", async () => {
@@ -95,9 +105,7 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
       screen.getByText(/No immutable Context Package is attached yet/)
     ).toBeInTheDocument()
     await userEvent.click(screen.getByRole("tab", { name: /Handoff/ }))
-    expect(
-      screen.getByPlaceholderText("Outcome summary")
-    ).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Outcome summary")).toBeInTheDocument()
   })
 
   it("renders persisted run generations and blocking dependencies", async () => {
@@ -199,5 +207,174 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
     expect(
       screen.getByRole("button", { name: /Retry: Spec traceability/ })
     ).toBeInTheDocument()
+  })
+
+  it("renders integration Git facts and refreshes a conflict plan through transport", async () => {
+    api.specosWorkTaskIntegrationPlan.mockResolvedValue({
+      taskId: 11,
+      status: "conflict",
+      conflicts: ["MERGE_HEAD"],
+      sources: [
+        {
+          taskId: 3,
+          title: "Source A",
+          status: "review",
+          runSeq: 2,
+          branch: "source-a",
+          currentHead: "abc123",
+          capturedHead: "abc123",
+          capturedRunSeq: 2,
+          hasHandoff: true,
+          handoffTrusted: true,
+          gitBranchExists: true,
+          specCurrent: true,
+          gatesEligible: true,
+          eligibilityReason: null,
+          mergeOrder: 0,
+          stale: false,
+        },
+      ],
+    })
+    api.specosWorkTaskIntegrationRefresh.mockResolvedValue({
+      taskId: 11,
+      status: "landed",
+      conflicts: [],
+      sources: [],
+    })
+    renderPanel("integration")
+
+    await waitFor(() => {
+      expect(api.specosWorkTaskIntegrationPlan).toHaveBeenCalledWith(11)
+    })
+    await userEvent.click(
+      await screen.findByRole("tab", { name: /Integration/ })
+    )
+    expect(
+      await screen.findByText("Merge recovery required: MERGE_HEAD")
+    ).toBeInTheDocument()
+    expect(screen.getByText("1. Source A")).toBeInTheDocument()
+    expect(screen.getByText("abc123")).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: /Refresh plan/ }))
+    await waitFor(() => {
+      expect(api.specosWorkTaskIntegrationRefresh).toHaveBeenCalledWith(11)
+    })
+    expect(screen.getByText("landed")).toBeInTheDocument()
+  })
+
+  it("previews and binds the exact selected Spec contract", async () => {
+    const user = userEvent.setup()
+    api.workTaskContractPreview.mockResolvedValue({
+      source_spec_id: "BUGRAIL-SPECOS-001",
+      source_spec_version: "0.3",
+      source_spec_path:
+        ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md",
+      source_spec_hash: "approved-hash",
+      acceptance_criteria: [
+        { id: "BUGRAIL-SPECOS-001.AC01", title: "Bind", text: "Bind" },
+        { id: "BUGRAIL-SPECOS-001.AC02", title: "Reject", text: "Reject" },
+      ],
+      current_binding_hash: null,
+    })
+    api.workTaskContractBind.mockResolvedValue(undefined)
+    renderPanel()
+
+    const path = await screen.findByLabelText("Feature Spec path")
+    await user.clear(path)
+    await user.type(
+      path,
+      ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md"
+    )
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /BUGRAIL-SPECOS-001\.AC02/,
+      })
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: "Require human approval" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Bind 1 criteria" })
+    )
+
+    expect(api.workTaskContractBind).toHaveBeenCalledWith(11, {
+      source_spec_path:
+        ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md",
+      expected_source_spec_hash: "approved-hash",
+      selected_acceptance_criteria_ids: ["BUGRAIL-SPECOS-001.AC01"],
+      gate_policy: {
+        gates: [
+          {
+            id: "preflight",
+            type: "preflight",
+            required: true,
+            reusable: true,
+            allow_waiver: false,
+          },
+        ],
+      },
+    })
+  })
+
+  it("submits a reasoned human approval and keeps tabs keyboard reachable", async () => {
+    const user = userEvent.setup()
+    api.workTaskContractGet.mockResolvedValue({
+      task_id: 11,
+      source_spec_id: "BUGRAIL-SPECOS-001",
+      source_spec_version: "0.3",
+      source_spec_path:
+        ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md",
+      source_spec_hash: "approved-hash",
+      acceptance_criteria: [
+        { id: "BUGRAIL-SPECOS-001.AC01", title: "Bind", text: "Bind" },
+      ],
+      gate_policy: { gates: [] },
+      created_at: "2026-08-23T00:00:00Z",
+      updated_at: "2026-08-23T00:00:00Z",
+    })
+    api.workTaskGateDecision.mockResolvedValue({
+      eligible: false,
+      stale_spec: false,
+      required: [
+        {
+          gate_id: "human-approval",
+          gate_type: "human_approval",
+          status: null,
+          reason: "not run",
+        },
+      ],
+      unmet: [
+        {
+          gate_id: "human-approval",
+          gate_type: "human_approval",
+          status: null,
+          reason: "not run",
+        },
+      ],
+      waived: [],
+    })
+    api.workTaskGateHumanDecide.mockResolvedValue(undefined)
+    renderPanel()
+
+    const contractTab = await screen.findByRole("tab", { name: /Contract/ })
+    const runsTab = screen.getByRole("tab", { name: /Runs/ })
+    const tabList = screen.getByRole("tablist")
+    expect(tabList).toHaveAttribute("tabindex", "0")
+    act(() => tabList.focus())
+    expect(contractTab).toHaveFocus()
+    await user.keyboard("{ArrowRight}")
+    await waitFor(() => expect(runsTab).toHaveFocus())
+    await user.keyboard("{ArrowLeft}")
+    await waitFor(() => expect(contractTab).toHaveFocus())
+
+    await user.type(screen.getByPlaceholderText("Decision reason"), "reviewed")
+    await user.click(screen.getByRole("button", { name: "Approve" }))
+    expect(api.workTaskGateHumanDecide).toHaveBeenCalledWith(
+      11,
+      "human-approval",
+      "approve",
+      "reviewed"
+    )
   })
 })

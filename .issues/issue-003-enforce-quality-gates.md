@@ -5,7 +5,7 @@ status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-001
 sourceSpecVersion: "0.3"
-sourceSpecHash: "81b9aff1353243855173525f5a9111200f00a201674a338871f1b344084d657d"
+sourceSpecHash: "79160488f65ae762decaa6db4987c15a783f61c886588c1e9157fc1bb40ab0d0"
 requirements: [BUGRAIL-SPECOS-001.R04, BUGRAIL-SPECOS-001.R05, BUGRAIL-SPECOS-001.R06, BUGRAIL-SPECOS-001.R07, BUGRAIL-SPECOS-001.R09, BUGRAIL-SPECOS-001.R10]
 dependsOn: [issue-001, issue-002]
 ---

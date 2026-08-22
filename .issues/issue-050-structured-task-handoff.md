@@ -30,3 +30,11 @@ Use trusted command core, exact run attribution and restart-safe get/save semant
 - Record exact commands and durable evidence before changing this Issue to
   verified; implementation status alone does not satisfy the source Test Spec.
 
+## Verification Record
+
+- Date: `2026-08-21`
+- Evidence: `tests/results/2026-08-21-specos-005-verification.md`
+- Result: correlated handoff command-core, SQLite/Git facts, legacy summary
+  compatibility, and targeted UI/transport tests pass.
+- Status remains `implemented_pending_verification`: restart, full transport
+  parity, and independent end-to-end evidence remain incomplete.

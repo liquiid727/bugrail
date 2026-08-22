@@ -19,6 +19,8 @@ import {
   specosWorkTaskDependencies,
   specosWorkTaskHandoffGet,
   specosWorkTaskHandoffSave,
+  specosWorkTaskIntegrationPlan,
+  specosWorkTaskIntegrationRefresh,
   specosWorkTaskRuns,
   workTaskContractBind,
   workTaskContractGet,
@@ -30,6 +32,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type {
   ContextPackageInfo,
+  IntegrationPlan,
   WorkTask,
   WorkTaskContract,
   WorkTaskContractPreview,
@@ -65,6 +68,8 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
   const [contextPackage, setContextPackage] =
     useState<ContextPackageInfo | null>(null)
   const [handoff, setHandoff] = useState<WorkTaskHandoffInfo | null>(null)
+  const [integrationPlan, setIntegrationPlan] =
+    useState<IntegrationPlan | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -94,6 +99,12 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
       setDependencies(nextDependencies)
       setHandoff(nextHandoff)
 
+      setIntegrationPlan(
+        task.task_kind === "integration"
+          ? await specosWorkTaskIntegrationPlan(task.id)
+          : null
+      )
+
       const packageId = nextRuns.find(
         (run) => run.contextPackageId
       )?.contextPackageId
@@ -105,7 +116,7 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
     } finally {
       setLoading(false)
     }
-  }, [task.id])
+  }, [task.id, task.task_kind])
 
   useEffect(() => {
     void reload()
@@ -180,6 +191,14 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
               >
                 <Send /> {t("specosHandoffTab")}
               </TabsTrigger>
+              {task.task_kind === "integration" ? (
+                <TabsTrigger
+                  value="integration"
+                  className="h-7 flex-none px-2 text-xs"
+                >
+                  <ClipboardCheck /> {t("specosIntegrationTab")}
+                </TabsTrigger>
+              ) : null}
             </TabsList>
 
             <TabsContent value="contract" className="pt-2">
@@ -208,10 +227,105 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
                 onSaved={setHandoff}
               />
             </TabsContent>
+            {task.task_kind === "integration" ? (
+              <TabsContent value="integration" className="pt-2">
+                <IntegrationPane
+                  plan={integrationPlan}
+                  onRefresh={async () => {
+                    const next = await specosWorkTaskIntegrationRefresh(task.id)
+                    setIntegrationPlan(next)
+                  }}
+                />
+              </TabsContent>
+            ) : null}
           </Tabs>
         )}
       </div>
     </section>
+  )
+}
+
+function IntegrationPane({
+  plan,
+  onRefresh,
+}: {
+  plan: IntegrationPlan | null
+  onRefresh: () => Promise<void>
+}) {
+  const t = useTranslations("Tasks")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await onRefresh()
+    } catch (cause) {
+      setError(toErrorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!plan) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <Badge variant={plan.status === "eligible" ? "secondary" : "outline"}>
+          {plan.status}
+        </Badge>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={busy}
+          onClick={() => void refresh()}
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          {t("specosRefreshIntegration")}
+        </Button>
+      </div>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {plan.conflicts.length > 0 ? (
+        <p className="text-xs text-destructive">
+          {t("specosIntegrationConflict", {
+            conflicts: plan.conflicts.join(", "),
+          })}
+        </p>
+      ) : null}
+      {plan.sources.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {t("specosIntegrationNoSources")}
+        </p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-background/70">
+          {plan.sources.map((source) => (
+            <li key={source.taskId} className="px-2.5 py-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate">
+                  {source.mergeOrder + 1}. {source.title}
+                </span>
+                <Badge variant="outline">{source.status}</Badge>
+              </div>
+              <p className="mt-1 break-all font-mono text-[0.625rem] text-muted-foreground">
+                {source.capturedHead ??
+                  source.currentHead ??
+                  t("specosIntegrationNoHead")}
+              </p>
+              {source.eligibilityReason ? (
+                <p className="mt-1 text-muted-foreground">
+                  {source.eligibilityReason}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
