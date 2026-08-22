@@ -73,9 +73,12 @@ pub async fn enqueue<C: ConnectionTrait>(
     match inserted {
         Ok(res) => {
             let id = res.last_insert_id;
-            Ok(delivery::Entity::find_by_id(id).one(conn).await?.ok_or_else(|| {
-                DbError::Validation("capture delivery row vanished after insert".into())
-            })?)
+            Ok(delivery::Entity::find_by_id(id)
+                .one(conn)
+                .await?
+                .ok_or_else(|| {
+                    DbError::Validation("capture delivery row vanished after insert".into())
+                })?)
         }
         // The unique key already owns this run generation — return the
         // existing row instead of duplicating it.
@@ -87,7 +90,10 @@ pub async fn enqueue<C: ConnectionTrait>(
     }
 }
 
-pub async fn get<C: ConnectionTrait>(conn: &C, id: i32) -> Result<Option<delivery::Model>, DbError> {
+pub async fn get<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+) -> Result<Option<delivery::Model>, DbError> {
     Ok(delivery::Entity::find_by_id(id).one(conn).await?)
 }
 
@@ -212,7 +218,11 @@ pub async fn mark_failed<C: ConnectionTrait>(
     };
     let attempts = attempts.min(MAX_ATTEMPTS);
     let requeue = retryable && attempts < MAX_ATTEMPTS;
-    let status = if requeue { STATUS_QUEUED } else { STATUS_FAILED };
+    let status = if requeue {
+        STATUS_QUEUED
+    } else {
+        STATUS_FAILED
+    };
     let mut active = row.into_active_model();
     active.status = Set(status.into());
     active.attempts = Set(attempts);
@@ -236,7 +246,10 @@ pub async fn requeue_for_retry<C: ConnectionTrait>(conn: &C, id: i32) -> Result<
             delivery::Column::Status,
             sea_orm::sea_query::Expr::value(STATUS_QUEUED),
         )
-        .col_expr(delivery::Column::Attempts, sea_orm::sea_query::Expr::value(0))
+        .col_expr(
+            delivery::Column::Attempts,
+            sea_orm::sea_query::Expr::value(0),
+        )
         .col_expr(
             delivery::Column::Retryable,
             sea_orm::sea_query::Expr::value(true),

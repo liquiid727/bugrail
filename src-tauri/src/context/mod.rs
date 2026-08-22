@@ -54,6 +54,97 @@ struct PackCandidate {
     required: bool,
     provenance: serde_json::Value,
 }
+
+/// One Memory recall candidate awaiting package-budget adjudication. Carries
+/// the evidence slot plus the bounded metadata needed to record an
+/// included/excluded decision without retaining remote content.
+struct MemoryCandidate {
+    candidate: PackCandidate,
+    evidence: usize,
+    layer: &'static str,
+    remote_id: String,
+    score: Option<f64>,
+}
+
+/// Per-provider recall evidence persisted into
+/// `work_task_context_pack.memory_evidence`. Holds hashes and bounded
+/// metadata only — never remote content, query text or credentials
+/// (BUGRAIL-SPECOS-017 R05/R07).
+struct MemoryProviderEvidence {
+    provider_id: String,
+    adapter: String,
+    query_hash: String,
+    included: Vec<serde_json::Value>,
+    excluded: Vec<serde_json::Value>,
+}
+
+/// Untrusted-data bounds for persisted recall evidence (R07): fixed-set
+/// reasons, capped remote ids and capped array sizes keep the column small
+/// and deterministic for identical recall inputs.
+const EVIDENCE_MAX_REMOTE_ID_CHARS: usize = 128;
+const EVIDENCE_MAX_REASON_CHARS: usize = 64;
+const EVIDENCE_MAX_ENTRIES: usize = 64;
+
+fn bound_reason(reason: &str) -> String {
+    reason
+        .chars()
+        .take(EVIDENCE_MAX_REASON_CHARS)
+        .collect::<String>()
+}
+
+fn bound_remote_id(remote_id: &str) -> String {
+    remote_id
+        .chars()
+        .take(EVIDENCE_MAX_REMOTE_ID_CHARS)
+        .collect::<String>()
+}
+
+impl MemoryProviderEvidence {
+    fn entry(candidate: &MemoryCandidate, reason: Option<&str>) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "contentHash": candidate.candidate.hash,
+            "layer": candidate.layer,
+            "remoteId": bound_remote_id(&candidate.remote_id),
+        });
+        if let Some(score) = candidate.score {
+            value["score"] = serde_json::json!(score);
+        }
+        if let Some(reason) = reason {
+            value["reason"] = serde_json::json!(bound_reason(reason));
+        }
+        value
+    }
+
+    fn record_included(&mut self, candidate: &MemoryCandidate) {
+        if self.included.len() < EVIDENCE_MAX_ENTRIES {
+            self.included.push(Self::entry(candidate, None));
+        }
+    }
+
+    fn record_excluded(&mut self, candidate: &MemoryCandidate, reason: &str) {
+        if self.excluded.len() < EVIDENCE_MAX_ENTRIES {
+            self.excluded.push(Self::entry(candidate, Some(reason)));
+        }
+    }
+
+    fn record_plain_exclusion(&mut self, reason: &str) {
+        if self.excluded.len() < EVIDENCE_MAX_ENTRIES {
+            self.excluded.push(serde_json::json!({
+                "reason": bound_reason(reason),
+            }));
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "provider": self.provider_id,
+            "adapter": self.adapter,
+            "queryHash": self.query_hash,
+            "included": self.included,
+            "excluded": self.excluded,
+        })
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_run(
     conn: &DatabaseConnection,
@@ -117,6 +208,175 @@ pub async fn prepare_run(
                 "required context provider '{}' is unavailable",
                 provider.id
             )));
+        }
+    }
+
+    // Recall uses only the bounded task title. It never sends the compiled
+    // prompt, repository files, tool output or credentials to the provider.
+    let memory_query = work_task::Entity::find_by_id(task_id)
+        .one(conn)
+        .await?
+        .map(|task| task.title.trim().chars().take(2_000).collect::<String>())
+        .unwrap_or_default();
+    let memory_query_hash = digest(memory_query.as_bytes());
+    let mut memory_candidates: Vec<MemoryCandidate> = Vec::new();
+    let mut evidence: Vec<MemoryProviderEvidence> = Vec::new();
+    if !memory_query.is_empty() {
+        for provider in selected_providers
+            .iter()
+            .filter(|provider| provider.kind == crate::memory::MEMORY_KIND && provider.enabled)
+        {
+            let recall_capable = provider.recall_enabled
+                && provider
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == crate::memory::CAP_RECALL_L1);
+            let slot = evidence.len();
+            evidence.push(MemoryProviderEvidence {
+                provider_id: provider.id.clone(),
+                adapter: provider.adapter.clone().unwrap_or_default(),
+                query_hash: memory_query_hash.clone(),
+                included: Vec::new(),
+                excluded: Vec::new(),
+            });
+            if !recall_capable {
+                evidence[slot].record_plain_exclusion("not_configured");
+                continue;
+            }
+            let (resolved, adapter) = match memory.adapter_for(provider, None) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    record_activity(
+                        conn,
+                        folder_id,
+                        None,
+                        Some(&provider.id),
+                        "memory.recall",
+                        "degraded",
+                        Some(error.class.key()),
+                    )
+                    .await?;
+                    let reason = match error.class {
+                        crate::memory::MemoryErrorClass::ConfigInvalid
+                        | crate::memory::MemoryErrorClass::IdentityMissing => {
+                            "not_configured".to_string()
+                        }
+                        class => format!("adapter_error:{}", class.key()),
+                    };
+                    evidence[slot].record_plain_exclusion(&reason);
+                    if provider.required {
+                        return Err(DbError::Validation(format!(
+                            "required Memory provider '{}' cannot be resolved",
+                            provider.id
+                        )));
+                    }
+                    continue;
+                }
+            };
+            let request = crate::memory::MemoryRecallRequest {
+                team_id: resolved.team_id.clone(),
+                agent_id: resolved.agent_id.clone(),
+                user_id: resolved.user_id.clone(),
+                query: memory_query.clone(),
+                limit: resolved.recall_limit,
+                include_core: resolved.can_recall_core(),
+            };
+            match adapter.recall(&request, resolved.timeout).await {
+                Ok(result) => {
+                    // Fixed package order (spec §6): L3 Core first, then L1
+                    // ordered by score descending with remote ID as the
+                    // deterministic tie-break.
+                    let mut l1 = result.l1;
+                    l1.sort_by(|a, b| {
+                        b.score
+                            .unwrap_or(0.0)
+                            .partial_cmp(&a.score.unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.remote_id.cmp(&b.remote_id))
+                    });
+                    let mut hits = Vec::new();
+                    if resolved.can_recall_core() {
+                        hits.extend(result.l3);
+                    }
+                    hits.extend(l1);
+                    if hits.is_empty() {
+                        evidence[slot].record_plain_exclusion("empty");
+                    }
+                    let mut included_count = 0usize;
+                    for hit in hits {
+                        let layer = match hit.layer {
+                            crate::memory::MemoryLayer::L1 => "l1",
+                            crate::memory::MemoryLayer::L3 => "l3",
+                        };
+                        let wrapper = MemoryCandidate {
+                            candidate: PackCandidate {
+                                kind: "memory".into(),
+                                source: format!(
+                                    "{}/{}",
+                                    crate::memory::ADAPTER_TENCENTDB_V3,
+                                    layer
+                                ),
+                                title: format!("TencentDB Memory {layer}"),
+                                hash: digest(hit.content.as_bytes()),
+                                content: hit.content,
+                                required: false,
+                                provenance: serde_json::json!({
+                                    "provider": provider.id,
+                                    "adapter": crate::memory::ADAPTER_TENCENTDB_V3,
+                                    "layer": layer,
+                                    "remoteId": hit.remote_id,
+                                    "score": hit.score,
+                                    "capturedAt": hit.captured_at,
+                                    "queryHash": memory_query_hash.clone(),
+                                }),
+                            },
+                            evidence: slot,
+                            layer,
+                            remote_id: hit.remote_id,
+                            score: hit.score,
+                        };
+                        if wrapper.candidate.content.trim().is_empty() {
+                            // The candidate keeps remote id/layer metadata so
+                            // the exclusion stays attributable; content
+                            // itself is dropped.
+                            evidence[slot].record_excluded(&wrapper, "empty");
+                            continue;
+                        }
+                        included_count += 1;
+                        memory_candidates.push(wrapper);
+                    }
+                    record_activity(
+                        conn,
+                        folder_id,
+                        None,
+                        Some(&provider.id),
+                        "memory.recall",
+                        "ready",
+                        Some(&format!("{included_count} memory hits")),
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    record_activity(
+                        conn,
+                        folder_id,
+                        None,
+                        Some(&provider.id),
+                        "memory.recall",
+                        "degraded",
+                        Some(error.class.key()),
+                    )
+                    .await?;
+                    evidence[slot]
+                        .record_plain_exclusion(&format!("adapter_error:{}", error.class.key()));
+                    if provider.required {
+                        return Err(DbError::Validation(format!(
+                            "required Memory provider '{}' recall failed",
+                            provider.id
+                        )));
+                    }
+                }
+            }
         }
     }
 
@@ -231,6 +491,38 @@ pub async fn prepare_run(
         });
     }
 
+    // Remote Memory is appended after local files and engine extras, sharing
+    // the same loadout budgets and deduplication rules. Every adjudication
+    // is recorded as included/excluded evidence (R05): local content wins
+    // dedup, and budget rejects carry a bounded reason.
+    for wrapper in memory_candidates {
+        if candidates.len() >= loadout.max_items {
+            evidence[wrapper.evidence].record_excluded(&wrapper, "budget_items");
+            continue;
+        }
+        let content_len = wrapper.candidate.content.len();
+        if content_len > loadout.max_bytes {
+            evidence[wrapper.evidence].record_excluded(&wrapper, "oversized");
+            continue;
+        }
+        let remaining = loadout.max_bytes.saturating_sub(total);
+        if content_len > remaining {
+            evidence[wrapper.evidence].record_excluded(&wrapper, "budget_bytes");
+            continue;
+        }
+        if (total + content_len).div_ceil(4) > loadout.max_tokens {
+            evidence[wrapper.evidence].record_excluded(&wrapper, "budget_tokens");
+            continue;
+        }
+        if !seen.insert(wrapper.candidate.hash.clone()) {
+            evidence[wrapper.evidence].record_excluded(&wrapper, "duplicate");
+            continue;
+        }
+        total += content_len;
+        evidence[wrapper.evidence].record_included(&wrapper);
+        candidates.push(wrapper.candidate);
+    }
+
     let estimated_tokens = total.div_ceil(4);
     if estimated_tokens > loadout.max_tokens {
         return Err(DbError::Validation(format!(
@@ -246,7 +538,23 @@ pub async fn prepare_run(
     }
     let content_hash = format!("{:x}", package_hasher.finalize());
     let provider_status = serde_json::to_value(&health).unwrap_or_else(|_| serde_json::json!([]));
-    let status = if health.iter().any(|h| h.status == "degraded") {
+    // Recall evidence: deterministic (config provider order, fixed hit
+    // order, capped arrays) so identical recall inputs keep the package
+    // stable. `None` only when no Memory provider participated.
+    let memory_evidence = (!evidence.is_empty()).then(|| {
+        serde_json::json!({ "providers": evidence.iter().map(MemoryProviderEvidence::to_json).collect::<Vec<_>>() }).to_string()
+    });
+    // Memory is an optional enhancement by default: an unavailable remote
+    // Memory service must not make the local file Context Package unusable.
+    // Required providers and legacy remote providers retain the existing
+    // degraded status behavior.
+    let status = if health.iter().any(|h| {
+        h.status == "degraded"
+            && selected_providers
+                .iter()
+                .find(|provider| provider.id == h.id)
+                .is_none_or(|provider| provider.kind != crate::memory::MEMORY_KIND)
+    }) {
         "degraded"
     } else {
         "ready"
@@ -262,7 +570,7 @@ pub async fn prepare_run(
         estimated_tokens: Set(estimated_tokens as i32),
         total_bytes: Set(total as i32),
         provider_status: Set(provider_status.to_string()),
-        memory_evidence: NotSet,
+        memory_evidence: Set(memory_evidence),
         created_at: Set(now),
     }
     .insert(&txn)

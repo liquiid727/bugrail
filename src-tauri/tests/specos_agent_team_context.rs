@@ -4,20 +4,25 @@
 //! is SQLite after the call, YAML after validate-then-rename, and command-core
 //! errors. Live events are never the only oracle.
 
+use chrono::Utc;
 use codeg_lib::agent_runtime;
 use codeg_lib::context;
-use codeg_lib::db::entities::{work_task, work_task_run};
+use codeg_lib::db::entities::{work_task, work_task_contract, work_task_run};
 use codeg_lib::db::service::{specos_runtime_service, work_task_service};
 use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_folder};
+use codeg_lib::db::AppDatabase;
 use codeg_lib::models::{
     AgentCatalog, AgentProfile, ContextConfig, ContextLoadout, ContextProviderConfig,
     ContextSourceConfig, ModelProfile, ResolvedAgentRuntime, WorkTaskConfig, WorkTaskDraft,
-    WorkTaskFolderSettings, WorkTaskHandoffDraft,
+    WorkTaskFolderSettings, WorkTaskHandoffDraft, WorkTaskKind,
 };
 use codeg_lib::specos_control;
+use codeg_lib::web::event_bridge::EventEmitter;
+use codeg_lib::work_task::engine;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, Set,
 };
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -38,7 +43,14 @@ fn task(folder_id: i32, title: &str) -> WorkTaskDraft {
             "display_text": title,
             "prompt_blocks": [{"type":"text","text":title}],
         }),
+        task_kind: Default::default(),
     }
+}
+
+fn integration_task(folder_id: i32, title: &str) -> WorkTaskDraft {
+    let mut draft = task(folder_id, title);
+    draft.task_kind = WorkTaskKind::Integration;
+    draft
 }
 
 fn task_with_profile(folder_id: i32, title: &str, profile: &str) -> WorkTaskDraft {
@@ -50,6 +62,7 @@ fn task_with_profile(folder_id: i32, title: &str, profile: &str) -> WorkTaskDraf
             "prompt_blocks": [{"type":"text","text":title}],
             "agent_profile_id": profile,
         }),
+        task_kind: Default::default(),
     }
 }
 
@@ -592,6 +605,40 @@ async fn t02_blocked_child_not_selected() {
 }
 
 #[tokio::test]
+async fn t02_manual_start_refuses_blocked_child() {
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, "/tmp/specos-dep-t02-manual-start").await;
+    let parent = work_task_service::create(&db.conn, task(folder_id, "P"))
+        .await
+        .unwrap();
+    let child = work_task_service::create(&db.conn, task(folder_id, "C"))
+        .await
+        .unwrap();
+    specos_runtime_service::add_dependency(&db.conn, parent.id, child.id, "completion")
+        .await
+        .unwrap();
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let engine = engine::new_for_test(
+        AppDatabase {
+            conn: db.conn.clone(),
+        },
+        EventEmitter::Noop,
+        data_dir.path().to_path_buf(),
+    );
+    assert_eq!(
+        engine.start(child.id).await.unwrap_err(),
+        "workTask.dependency.unmet"
+    );
+
+    let row = work_task_service::get_model(&db.conn, child.id)
+        .await
+        .unwrap();
+    assert_eq!(row.status, work_task::WorkTaskStatus::Todo);
+    assert_eq!(row.run_seq, 0);
+}
+
+#[tokio::test]
 async fn t03_parallel_ready_claims() {
     let db = fresh_in_memory_db().await;
     let folder_id = seed_folder(&db, "/tmp/specos-dep-t03").await;
@@ -673,7 +720,44 @@ async fn t05_concurrency_race_cycle() {
 }
 
 #[tokio::test]
-async fn t06_legacy_task_readiness() {
+async fn t06_claim_and_dependency_write_cannot_both_win() {
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, "/tmp/specos-dep-claim-race").await;
+    let parent = work_task_service::create(&db.conn, task(folder_id, "P"))
+        .await
+        .unwrap();
+    let child = work_task_service::create(&db.conn, task(folder_id, "C"))
+        .await
+        .unwrap();
+
+    let (claim, edge) = tokio::join!(
+        work_task_service::claim_for_run(
+            &db.conn,
+            child.id,
+            work_task::WorkTaskStatus::Todo,
+            "user",
+        ),
+        specos_runtime_service::add_dependency(&db.conn, parent.id, child.id, "completion",),
+    );
+
+    assert!(
+        !(claim.as_ref().is_ok_and(|run| run.is_some()) && edge.is_ok()),
+        "claim and dependency write both committed"
+    );
+    let child_row = work_task_service::get_model(&db.conn, child.id)
+        .await
+        .unwrap();
+    if edge.is_ok() {
+        assert_eq!(child_row.status, work_task::WorkTaskStatus::Todo);
+        assert!(claim.is_err());
+    } else {
+        assert_eq!(child_row.status, work_task::WorkTaskStatus::Queued);
+        assert!(claim.unwrap().is_some());
+    }
+}
+
+#[tokio::test]
+async fn t07_legacy_task_readiness() {
     let db = fresh_in_memory_db().await;
     let folder_id = seed_folder(&db, "/tmp/specos-dep-t06").await;
     let a = work_task_service::create(&db.conn, task(folder_id, "legacy"))
@@ -696,17 +780,23 @@ async fn t06_legacy_task_readiness() {
 
 #[tokio::test]
 async fn t01_handoff_roundtrip() {
+    let (repo, head_a, _) = init_repo_with_sources();
     let db = fresh_in_memory_db().await;
-    let folder_id = seed_folder(&db, "/tmp/specos-handoff-t01").await;
+    let folder_id = seed_folder(&db, repo.path().to_str().unwrap()).await;
     let a = work_task_service::create(&db.conn, task(folder_id, "A"))
         .await
         .unwrap();
     work_task_service::claim_for_run(&db.conn, a.id, work_task::WorkTaskStatus::Todo, "test")
         .await
         .unwrap();
-    let saved = specos_runtime_service::save_handoff(
+    set_branch(&db.conn, a.id, "src-a").await;
+    set_status(&db.conn, a.id, work_task::WorkTaskStatus::Running).await;
+    assert!(work_task_service::set_verdict_with_handoff(
         &db.conn,
         a.id,
+        1,
+        "success",
+        Some("merged the payment adapter"),
         WorkTaskHandoffDraft {
             summary: "merged the payment adapter".into(),
             artifacts: vec!["src/pay.rs".into()],
@@ -715,14 +805,17 @@ async fn t01_handoff_roundtrip() {
         },
     )
     .await
-    .unwrap();
-    assert_eq!(saved.run_seq, 1);
-    let loaded = specos_runtime_service::get_handoff(&db.conn, a.id, Some(1))
+    .unwrap());
+    let saved = specos_runtime_service::get_handoff(&db.conn, a.id, Some(1))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(loaded.summary, "merged the payment adapter");
-    assert_eq!(loaded.artifacts, vec!["src/pay.rs"]);
+    assert_eq!(saved.run_seq, 1);
+    assert_eq!(saved.actor, "agent");
+    assert_eq!(saved.source_branch.as_deref(), Some("src-a"));
+    assert_eq!(saved.source_head.as_deref(), Some(head_a.as_str()));
+    assert_eq!(saved.summary, "merged the payment adapter");
+    assert_eq!(saved.artifacts, vec!["src/pay.rs"]);
 }
 
 #[tokio::test]
@@ -768,6 +861,37 @@ async fn t06_legacy_summary_compatibility() {
         .await
         .unwrap()
         .is_none());
+
+    let active = work_task_service::create(&db.conn, task(folder_id, "old payload"))
+        .await
+        .unwrap();
+    work_task_service::claim_for_run(&db.conn, active.id, work_task::WorkTaskStatus::Todo, "test")
+        .await
+        .unwrap();
+    set_status(&db.conn, active.id, work_task::WorkTaskStatus::Running).await;
+    assert!(work_task_service::set_verdict(
+        &db.conn,
+        active.id,
+        1,
+        "success",
+        Some("legacy task_complete summary"),
+    )
+    .await
+    .unwrap());
+    assert!(
+        specos_runtime_service::get_handoff(&db.conn, active.id, Some(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        work_task_service::get_model(&db.conn, active.id)
+            .await
+            .unwrap()
+            .result_summary
+            .as_deref(),
+        Some("legacy task_complete summary")
+    );
 }
 
 // ── BUGRAIL-SPECOS-006 / 007 / 008 ────────────────────────────────────────
@@ -1501,6 +1625,11 @@ fn init_repo_with_sources() -> (tempfile::TempDir, String, String) {
     git_run(dir.path(), &["init", "-q"]);
     git_run(dir.path(), &["checkout", "-qb", "main"]);
     std::fs::write(dir.path().join("base.txt"), "base\n").unwrap();
+    std::fs::write(
+        dir.path().join("source-spec.md"),
+        "---\nid: TEST-SOURCE\nversion: \"1\"\nstatus: approved\n---\n\n# Source\n",
+    )
+    .unwrap();
     git_run(dir.path(), &["add", "-A"]);
     git_run(dir.path(), &["commit", "-qm", "base"]);
     git_run(dir.path(), &["checkout", "-qb", "src-a"]);
@@ -1549,6 +1678,29 @@ async fn set_branch(conn: &sea_orm::DatabaseConnection, id: i32, branch: &str) {
     active.update(conn).await.unwrap();
 }
 
+async fn bind_ready_source_contract(
+    conn: &sea_orm::DatabaseConnection,
+    task_id: i32,
+    repo_path: &Path,
+) {
+    let bytes = std::fs::read(repo_path.join("source-spec.md")).unwrap();
+    let hash = format!("{:x}", Sha256::digest(bytes));
+    work_task_contract::ActiveModel {
+        task_id: Set(task_id),
+        source_spec_id: Set("TEST-SOURCE".into()),
+        source_spec_version: Set("1".into()),
+        source_spec_path: Set("source-spec.md".into()),
+        source_spec_hash: Set(hash),
+        acceptance_criteria: Set("[]".into()),
+        gate_policy: Set(r#"{"gates":[]}"#.into()),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+    }
+    .insert(conn)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn t02_missing_handoff_blocks_integration() {
     let db = fresh_in_memory_db().await;
@@ -1556,7 +1708,7 @@ async fn t02_missing_handoff_blocks_integration() {
     let source = work_task_service::create(&db.conn, task(folder_id, "src"))
         .await
         .unwrap();
-    let integ = work_task_service::create(&db.conn, task(folder_id, "integ"))
+    let integ = work_task_service::create(&db.conn, integration_task(folder_id, "integ"))
         .await
         .unwrap();
     specos_runtime_service::add_dependency(&db.conn, source.id, integ.id, "integration_source")
@@ -1577,6 +1729,51 @@ async fn t02_missing_handoff_blocks_integration() {
 }
 
 #[tokio::test]
+async fn integration_source_cannot_bypass_landing_settlement() {
+    let db = fresh_in_memory_db().await;
+    let folder_id = seed_folder(&db, "/tmp/specos-int-source-reserved").await;
+    let source = work_task_service::create(&db.conn, task(folder_id, "src"))
+        .await
+        .unwrap();
+    let integration = work_task_service::create(&db.conn, integration_task(folder_id, "integ"))
+        .await
+        .unwrap();
+    specos_runtime_service::add_dependency(
+        &db.conn,
+        source.id,
+        integration.id,
+        "integration_source",
+    )
+    .await
+    .unwrap();
+    set_status(&db.conn, source.id, work_task::WorkTaskStatus::Review).await;
+
+    let err = work_task_service::complete_without_merge(&db.conn, source.id, "skip merge")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("sourceReserved"), "{err}");
+    assert_eq!(
+        work_task_service::get_model(&db.conn, source.id)
+            .await
+            .unwrap()
+            .status,
+        work_task::WorkTaskStatus::Review
+    );
+
+    set_status(
+        &db.conn,
+        integration.id,
+        work_task::WorkTaskStatus::Canceled,
+    )
+    .await;
+    assert!(
+        work_task_service::complete_without_merge(&db.conn, source.id, "skip merge")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn t03_source_head_order() {
     let (repo, head_a, head_b) = init_repo_with_sources();
     let db = fresh_in_memory_db().await;
@@ -1587,7 +1784,7 @@ async fn t03_source_head_order() {
     let src_b = work_task_service::create(&db.conn, task(folder_id, "B"))
         .await
         .unwrap();
-    let integ = work_task_service::create(&db.conn, task(folder_id, "I"))
+    let integ = work_task_service::create(&db.conn, integration_task(folder_id, "I"))
         .await
         .unwrap();
     specos_runtime_service::add_dependency(&db.conn, src_a.id, integ.id, "integration_source")
@@ -1605,10 +1802,12 @@ async fn t03_source_head_order() {
     }
     // Sources must stay in review with a handoff on the live run_seq.
     for id in [src_a.id, src_b.id] {
-        set_status(&db.conn, id, work_task::WorkTaskStatus::Review).await;
-        specos_runtime_service::save_handoff(
+        bind_ready_source_contract(&db.conn, id, repo.path()).await;
+        set_status(&db.conn, id, work_task::WorkTaskStatus::Running).await;
+        specos_runtime_service::save_agent_handoff(
             &db.conn,
             id,
+            1,
             WorkTaskHandoffDraft {
                 summary: format!("ready {id}"),
                 ..Default::default()
@@ -1616,6 +1815,7 @@ async fn t03_source_head_order() {
         )
         .await
         .unwrap();
+        set_status(&db.conn, id, work_task::WorkTaskStatus::Review).await;
     }
     let plan = specos_runtime_service::refresh_integration_plan(
         &db.conn,
@@ -1665,7 +1865,7 @@ async fn t04_conflict_recovery() {
     );
     let db = fresh_in_memory_db().await;
     let folder_id = seed_folder(&db, dir.path().to_str().unwrap()).await;
-    let integ = work_task_service::create(&db.conn, task(folder_id, "I"))
+    let integ = work_task_service::create(&db.conn, integration_task(folder_id, "I"))
         .await
         .unwrap();
     let src = work_task_service::create(&db.conn, task(folder_id, "A"))
@@ -1705,7 +1905,7 @@ async fn t05_gated_integration_landing() {
     let src = work_task_service::create(&db.conn, task(folder_id, "A"))
         .await
         .unwrap();
-    let integ = work_task_service::create(&db.conn, task(folder_id, "I"))
+    let integ = work_task_service::create(&db.conn, integration_task(folder_id, "I"))
         .await
         .unwrap();
     specos_runtime_service::add_dependency(&db.conn, src.id, integ.id, "integration_source")
@@ -1713,9 +1913,12 @@ async fn t05_gated_integration_landing() {
         .unwrap();
     set_status(&db.conn, src.id, work_task::WorkTaskStatus::Review).await;
     set_branch(&db.conn, src.id, "src-a").await;
-    specos_runtime_service::save_handoff(
+    bind_ready_source_contract(&db.conn, src.id, repo.path()).await;
+    set_status(&db.conn, src.id, work_task::WorkTaskStatus::Running).await;
+    specos_runtime_service::save_agent_handoff(
         &db.conn,
         src.id,
+        0,
         WorkTaskHandoffDraft {
             summary: "ready".into(),
             ..Default::default()
@@ -1723,6 +1926,7 @@ async fn t05_gated_integration_landing() {
     )
     .await
     .unwrap();
+    set_status(&db.conn, src.id, work_task::WorkTaskStatus::Review).await;
     specos_runtime_service::refresh_integration_plan(
         &db.conn,
         integ.id,
@@ -1730,6 +1934,43 @@ async fn t05_gated_integration_landing() {
     )
     .await
     .unwrap();
+    specos_runtime_service::save_handoff(
+        &db.conn,
+        src.id,
+        WorkTaskHandoffDraft {
+            summary: "human revision".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let human_plan = specos_runtime_service::integration_plan(
+        &db.conn,
+        integ.id,
+        Some(repo.path().to_str().unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(human_plan.status, "waiting_source");
+    assert!(!human_plan.sources[0].handoff_trusted);
+    assert!(human_plan.sources[0]
+        .eligibility_reason
+        .as_deref()
+        .unwrap()
+        .contains("agent-correlated"));
+    set_status(&db.conn, src.id, work_task::WorkTaskStatus::Running).await;
+    specos_runtime_service::save_agent_handoff(
+        &db.conn,
+        src.id,
+        0,
+        WorkTaskHandoffDraft {
+            summary: "agent revision".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    set_status(&db.conn, src.id, work_task::WorkTaskStatus::Review).await;
     specos_runtime_service::assert_integration_landing(
         &db.conn,
         integ.id,
@@ -1759,6 +2000,31 @@ async fn t05_gated_integration_landing() {
     .await
     .unwrap_err();
     assert!(err.to_string().contains("notContained"), "{err}");
+    git_run(repo.path(), &["checkout", "-q", "main"]);
+    set_status(&db.conn, integ.id, work_task::WorkTaskStatus::Merging).await;
+    assert!(
+        work_task_service::merge_landed(&db.conn, integ.id, &landing)
+            .await
+            .unwrap()
+    );
+    let settled_source = work_task_service::get_model(&db.conn, src.id)
+        .await
+        .unwrap();
+    assert_eq!(settled_source.status, work_task::WorkTaskStatus::Done);
+    assert_eq!(
+        settled_source.merge_commit.as_deref(),
+        Some(landing.as_str())
+    );
+    let settled_integration = work_task_service::get_model(&db.conn, integ.id)
+        .await
+        .unwrap();
+    assert_eq!(settled_integration.status, work_task::WorkTaskStatus::Done);
+    let source_events = work_task_service::list_events(&db.conn, src.id, 100)
+        .await
+        .unwrap();
+    assert!(source_events
+        .iter()
+        .any(|event| event.kind == "integrated_by"));
 }
 
 // ── Code Intelligence engine items (non-MCP agents get a snapshot item) ──

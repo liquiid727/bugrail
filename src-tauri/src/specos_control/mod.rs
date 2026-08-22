@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use crate::db::entities::folder;
 use crate::db::error::DbError;
 use crate::models::{
-    AgentCatalog, ContextConfig, ContextLoadout, ContextSourceConfig, TeamCatalog,
+    AgentCatalog, ContextConfig, ContextLoadout, ContextProviderConfig, ContextSourceConfig,
+    TeamCatalog,
 };
 
 const CONFIG_DIR: &str = ".codeg";
@@ -111,11 +112,46 @@ pub fn save_teams(root: &Path, mut value: TeamCatalog) -> Result<TeamCatalog, Db
     Ok(value)
 }
 
+/// The product's default Memory provider. TencentDB is currently the only
+/// supported remote Memory adapter, so projects do not need to opt into a
+/// provider just to get the default Memory behavior. Credentials remain
+/// environment references and are resolved only when a request is sent.
+pub fn default_memory_provider() -> ContextProviderConfig {
+    ContextProviderConfig {
+        id: "project-memory".into(),
+        kind: crate::memory::MEMORY_KIND.into(),
+        adapter: Some(crate::memory::ADAPTER_TENCENTDB_V3.into()),
+        endpoint: Some("http://127.0.0.1:8420".into()),
+        secret_env: Some("TENCENTDB_AGENT_MEMORY_API_KEY".into()),
+        enabled: true,
+        required: false,
+        capabilities: vec![
+            crate::memory::CAP_CAPTURE.into(),
+            crate::memory::CAP_RECALL_L1.into(),
+            crate::memory::CAP_RECALL_L3.into(),
+        ],
+        service_id_env: Some("TENCENTDB_AGENT_MEMORY_SERVICE_ID".into()),
+        team_id: Some("team-example".into()),
+        user_id_env: Some("TENCENTDB_AGENT_MEMORY_USER_ID".into()),
+        default_agent_id: Some("agt-default".into()),
+        agent_id_map: BTreeMap::new(),
+        capture_enabled: true,
+        recall_enabled: true,
+        recall_limit: 5,
+        include_core: false,
+        timeout_ms: 5_000,
+        max_capture_message_bytes: 8 * 1024,
+        max_capture_batch_bytes: 256 * 1024,
+    }
+}
+
 pub fn default_context_config() -> ContextConfig {
+    let provider = default_memory_provider();
+    let provider_id = provider.id.clone();
     ContextConfig {
         version: 1,
         default_loadout_id: "default".into(),
-        providers: Vec::new(),
+        providers: vec![provider],
         loadouts: vec![ContextLoadout {
             id: "default".into(),
             name: "Project essentials".into(),
@@ -136,7 +172,7 @@ pub fn default_context_config() -> ContextConfig {
                     kind: "rules".into(),
                 },
             ],
-            provider_ids: Vec::new(),
+            provider_ids: vec![provider_id],
             max_items: 64,
             max_bytes: 512 * 1024,
             max_tokens: 32_000,
@@ -152,6 +188,9 @@ pub fn load_context(root: &Path) -> Result<ContextConfig, DbError> {
     } else {
         default_context_config()
     };
+    // No injection on load: a saved config without a Memory provider is a
+    // deliberate legacy/no-Memory project and must stay zero-Memory (017 AC08).
+    // New projects get the Memory provider through `default_context_config`.
     value.validation_errors = validate_context(&value);
     Ok(value)
 }
@@ -480,4 +519,90 @@ fn unique_ids<'a>(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_context_loads_tencentdb_memory() {
+        let config = default_context_config();
+        let provider = config
+            .providers
+            .iter()
+            .find(|provider| provider.kind == crate::memory::MEMORY_KIND)
+            .expect("default Memory provider");
+
+        assert_eq!(provider.id, "project-memory");
+        assert_eq!(
+            provider.adapter.as_deref(),
+            Some(crate::memory::ADAPTER_TENCENTDB_V3)
+        );
+        assert_eq!(provider.endpoint.as_deref(), Some("http://127.0.0.1:8420"));
+        assert!(config.loadouts[0].provider_ids.contains(&provider.id));
+        assert!(validate_context(&config).is_empty());
+    }
+
+    #[test]
+    fn legacy_context_without_memory_stays_zero_memory() {
+        let root = tempfile::tempdir().expect("project root");
+        let codeg = root.path().join(CONFIG_DIR);
+        std::fs::create_dir_all(&codeg).expect(".codeg");
+        let config = ContextConfig {
+            version: 1,
+            default_loadout_id: "default".into(),
+            providers: Vec::new(),
+            loadouts: vec![ContextLoadout {
+                id: "default".into(),
+                ..ContextLoadout::default()
+            }],
+            validation_errors: Vec::new(),
+        };
+        std::fs::write(
+            codeg.join("context.yaml"),
+            serde_yaml::to_string(&config).expect("serialize context"),
+        )
+        .expect("write context");
+
+        let loaded = load_context(root.path()).expect("load context");
+        assert_eq!(
+            loaded
+                .providers
+                .iter()
+                .filter(|provider| provider.kind == crate::memory::MEMORY_KIND)
+                .count(),
+            0,
+            "saved no-Memory configs must stay zero-Memory (017 AC08)"
+        );
+        assert!(!loaded.loadouts[0]
+            .provider_ids
+            .contains(&"project-memory".into()));
+    }
+
+    #[test]
+    fn existing_memory_provider_is_not_duplicated() {
+        let root = tempfile::tempdir().expect("project root");
+        let codeg = root.path().join(CONFIG_DIR);
+        std::fs::create_dir_all(&codeg).expect(".codeg");
+        let mut config = default_context_config();
+        config.providers[0].id = "custom-memory".into();
+        config.loadouts[0].provider_ids = vec!["custom-memory".into()];
+        std::fs::write(
+            codeg.join("context.yaml"),
+            serde_yaml::to_string(&config).expect("serialize context"),
+        )
+        .expect("write context");
+
+        let loaded = load_context(root.path()).expect("load context");
+        assert_eq!(
+            loaded
+                .providers
+                .iter()
+                .filter(|provider| provider.kind == crate::memory::MEMORY_KIND)
+                .count(),
+            1
+        );
+        assert_eq!(loaded.providers[0].id, "custom-memory");
+    }
 }

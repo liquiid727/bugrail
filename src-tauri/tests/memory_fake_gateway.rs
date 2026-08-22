@@ -134,13 +134,16 @@ async fn maybe_sleep(state: &Arc<Mutex<GatewayState>>) {
     }
 }
 
-async fn health_handler(
-    State(state): SharedState,
-    headers: HeaderMap,
-) -> Response {
+async fn health_handler(State(state): SharedState, headers: HeaderMap) -> Response {
     let redirect = {
         let mut guard = state.lock().await;
-        record(&mut guard, "GET", "/health", &headers, serde_json::Value::Null);
+        record(
+            &mut guard,
+            "GET",
+            "/health",
+            &headers,
+            serde_json::Value::Null,
+        );
         guard.health_redirect.clone()
     };
     maybe_sleep(&state).await;
@@ -158,10 +161,7 @@ async fn health_handler(
     };
     (
         [("x-tdai-request-id", "hdr-health-1")],
-        failure_response(
-            failure,
-            serde_json::json!({ "version": version }),
-        ),
+        failure_response(failure, serde_json::json!({ "version": version })),
     )
         .into_response()
 }
@@ -173,7 +173,13 @@ async fn add_handler(
 ) -> Response {
     maybe_sleep(&state).await;
     let mut guard = state.lock().await;
-    record(&mut guard, "POST", "/v3/conversation/add", &headers, body.clone());
+    record(
+        &mut guard,
+        "POST",
+        "/v3/conversation/add",
+        &headers,
+        body.clone(),
+    );
     let failure = guard.add_failure;
     let regenerate = guard.add_regenerate_ids;
     let ids: Vec<String> = body
@@ -183,7 +189,10 @@ async fn add_handler(
             messages
                 .iter()
                 .filter_map(|message| {
-                    message.get("id").and_then(|id| id.as_str()).map(str::to_string)
+                    message
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_string)
                 })
                 .collect()
         })
@@ -226,7 +235,8 @@ async fn search_handler(
     let failure = guard.search_failure;
     let hits = guard.search_hits.clone();
     drop(guard);
-    failure_response(failure, serde_json::json!({ "hits": hits }))
+    // Mirrors the pinned v3 contract: AtomicSearchData.items.
+    failure_response(failure, serde_json::json!({ "items": hits }))
 }
 
 async fn core_handler(
@@ -263,7 +273,9 @@ async fn start_gateway() -> (String, Arc<Mutex<GatewayState>>) {
         .route("/v3/core/read", post(core_handler))
         .with_state(state.clone());
     tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("fake gateway serve");
+        axum::serve(listener, app)
+            .await
+            .expect("fake gateway serve");
     });
     (url, state)
 }
@@ -302,11 +314,9 @@ fn build_adapter(config: &ContextProviderConfig) -> Arc<dyn MemoryProvider> {
 }
 
 fn capture_batch(suffix: &str, binding: &str, message_ids: &[&str]) -> MemoryCaptureBatch {
-    let resolved = resolve_memory_provider(
-        &provider_config("http://127.0.0.1:9", suffix, 5000),
-        None,
-    )
-    .expect("resolves");
+    let resolved =
+        resolve_memory_provider(&provider_config("http://127.0.0.1:9", suffix, 5000), None)
+            .expect("resolves");
     MemoryCaptureBatch {
         team_id: resolved.team_id,
         agent_id: resolved.agent_id,
@@ -330,11 +340,9 @@ fn capture_batch(suffix: &str, binding: &str, message_ids: &[&str]) -> MemoryCap
 }
 
 fn recall_request(suffix: &str, include_core: bool) -> MemoryRecallRequest {
-    let resolved = resolve_memory_provider(
-        &provider_config("http://127.0.0.1:9", suffix, 5000),
-        None,
-    )
-    .expect("resolves");
+    let resolved =
+        resolve_memory_provider(&provider_config("http://127.0.0.1:9", suffix, 5000), None)
+            .expect("resolves");
     MemoryRecallRequest {
         team_id: resolved.team_id,
         agent_id: resolved.agent_id,
@@ -580,7 +588,10 @@ async fn t02_capture_sends_identity_fields_verbatim() {
     let binding = identity::project_binding(std::path::Path::new("/tmp/ident-project"));
     let batch = capture_batch("IDENT", &binding, &["m-1", "m-2"]);
     let receipt = adapter.capture(&batch).await.expect("delivered");
-    assert_eq!(receipt.accepted_ids, vec!["m-1".to_string(), "m-2".to_string()]);
+    assert_eq!(
+        receipt.accepted_ids,
+        vec!["m-1".to_string(), "m-2".to_string()]
+    );
 
     let recorded = state.lock().await.requests.pop().unwrap();
     assert_eq!(recorded.path, "/v3/conversation/add");
@@ -591,7 +602,10 @@ async fn t02_capture_sends_identity_fields_verbatim() {
         recorded.body["session_id"],
         identity::session_id(&binding, 42, 1)
     );
-    assert_eq!(recorded.body["task_id"], identity::upstream_task_id(&binding, 42));
+    assert_eq!(
+        recorded.body["task_id"],
+        identity::upstream_task_id(&binding, 42)
+    );
     let messages = recorded.body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "user");

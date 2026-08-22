@@ -213,6 +213,7 @@ async fn settle_run(s: &Scenario, session_id: &str, status: &str) -> (i32, i32, 
             "display_text": "capture me",
             "prompt_blocks": [{"type":"text","text":"capture me"}],
         }),
+        task_kind: Default::default(),
     };
     let created = work_task_service::create(&s.db.conn, draft)
         .await
@@ -226,15 +227,10 @@ async fn settle_run(s: &Scenario, session_id: &str, status: &str) -> (i32, i32, 
     .await
     .expect("claim run")
     .expect("claim seq");
-    let conv = conversation_service::create(
-        &s.db.conn,
-        s.folder_id,
-        AgentType::ClaudeCode,
-        None,
-        None,
-    )
-    .await
-    .expect("create conversation");
+    let conv =
+        conversation_service::create(&s.db.conn, s.folder_id, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create conversation");
     conversation_service::update_external_id(&s.db.conn, conv.id, session_id.to_string())
         .await
         .expect("bind external id");
@@ -300,11 +296,15 @@ async fn t03_filtered_capture_delivers_once_and_clears_payload() {
     let s = setup_scenario("T03A", vec![provider_config("T03A")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
 
-    let staged = enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    let staged = enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
     assert_eq!(staged, 1, "one provider ⇒ one staged delivery");
 
     // Idempotent re-enqueue (the settle hook can race reconciliation).
-    let again = enqueue_for_run(&s.db, task_id, run_seq).await.expect("re-enqueue");
+    let again = enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("re-enqueue");
     assert_eq!(again, 0, "the unique key prevents duplicate rows");
     assert_eq!(delivery_rows(&s.db).await.len(), 1);
 
@@ -319,7 +319,10 @@ async fn t03_filtered_capture_delivers_once_and_clears_payload() {
         vec![
             ("user".into(), "please fix the login bug".into()),
             ("assistant".into(), "looking at auth.rs now".into()),
-            ("assistant".into(), "fixed the session check in auth.rs".into()),
+            (
+                "assistant".into(),
+                "fixed the session check in auth.rs".into()
+            ),
         ],
         "assistant mid-turn text belongs to the assistant role"
     );
@@ -328,14 +331,20 @@ async fn t03_filtered_capture_delivers_once_and_clears_payload() {
         .map(|(_, content)| content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!joined.contains("sk-liveabc"), "secret never leaves the host");
+    assert!(
+        !joined.contains("sk-liveabc"),
+        "secret never leaves the host"
+    );
     assert!(!joined.contains("tool_use"), "tool inputs are excluded");
     assert!(!joined.contains("fn login()"), "tool results are excluded");
 
     let row = &delivery_rows(&s.db).await[0];
     assert_eq!(row.status, "delivered");
     assert_eq!(row.attempts, 1);
-    assert!(row.payload.is_none(), "payload body is cleared after delivery");
+    assert!(
+        row.payload.is_none(),
+        "payload body is cleared after delivery"
+    );
     assert!(!row.payload_hash.is_empty(), "hash survives delivery");
     assert!(row.delivered_at.is_some());
     let accepted: Vec<String> =
@@ -351,7 +360,9 @@ async fn t03_filtered_capture_delivers_once_and_clears_payload() {
 async fn t03_restart_and_replay_never_duplicate_l0() {
     let s = setup_scenario("T03B", vec![provider_config("T03B")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
     deliver_due(&s.memory).await.expect("deliver");
     let l0_before = s.adapter.l0_count();
     assert!(l0_before > 0);
@@ -374,7 +385,9 @@ async fn t03_vanilla_gateway_blocks_capture_as_unsupported() {
     let s = setup_scenario("T03C", vec![provider_config("T03C")]).await;
     s.adapter.state().version = "v2.0.0".to_string();
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "failed").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
 
     deliver_due(&s.memory).await.expect("deliver");
     let row = &delivery_rows(&s.db).await[0];
@@ -399,7 +412,9 @@ async fn t03_vanilla_gateway_blocks_capture_as_unsupported() {
 async fn t05_retryable_failure_requeues_with_backoff_then_delivers() {
     let s = setup_scenario("T05A", vec![provider_config("T05A")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
 
     s.adapter.state().fail_capture = Some(MemoryErrorClass::Unavailable);
     deliver_due(&s.memory).await.expect("first pass");
@@ -433,7 +448,9 @@ async fn t05_retryable_failure_requeues_with_backoff_then_delivers() {
 async fn t05_non_retryable_failure_is_terminal_until_manual_retry() {
     let s = setup_scenario("T05B", vec![provider_config("T05B")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
 
     s.adapter.state().fail_capture = Some(MemoryErrorClass::Unauthorized);
     deliver_due(&s.memory).await.expect("first pass");
@@ -446,18 +463,22 @@ async fn t05_non_retryable_failure_is_terminal_until_manual_retry() {
     assert_eq!(deliver_due(&s.memory).await.expect("second pass"), 0);
 
     // Manual retry (Context UI command) resets the attempt budget.
-    assert!(memory_capture_service::requeue_for_retry(&s.db.conn, row.id)
-        .await
-        .expect("manual retry"));
+    assert!(
+        memory_capture_service::requeue_for_retry(&s.db.conn, row.id)
+            .await
+            .expect("manual retry")
+    );
     assert_eq!(deliver_due(&s.memory).await.expect("third pass"), 1);
     let row = &delivery_rows(&s.db).await[0];
     assert_eq!(row.status, "delivered");
     assert_eq!(row.attempts, 1);
 
     // Retrying a delivered row is rejected.
-    assert!(!memory_capture_service::requeue_for_retry(&s.db.conn, row.id)
-        .await
-        .expect("retry delivered"));
+    assert!(
+        !memory_capture_service::requeue_for_retry(&s.db.conn, row.id)
+            .await
+            .expect("retry delivered")
+    );
 }
 
 /// T05: the automatic attempt budget caps at five.
@@ -465,7 +486,9 @@ async fn t05_non_retryable_failure_is_terminal_until_manual_retry() {
 async fn t05_attempt_budget_caps_at_five() {
     let s = setup_scenario("T05C", vec![provider_config("T05C")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
     s.adapter.state().fail_capture = Some(MemoryErrorClass::Timeout);
 
     for attempt in 1..=memory_capture_service::MAX_ATTEMPTS {
@@ -490,12 +513,16 @@ async fn t05_attempt_budget_caps_at_five() {
 async fn startup_recovery_resets_sending_rows() {
     let s = setup_scenario("T05D", vec![provider_config("T05D")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
 
     // Simulate a crash mid-delivery: claim the row, then restart.
-    assert!(memory_capture_service::mark_sending(&s.db.conn, delivery_rows(&s.db).await[0].id)
-        .await
-        .expect("claim"));
+    assert!(
+        memory_capture_service::mark_sending(&s.db.conn, delivery_rows(&s.db).await[0].id)
+            .await
+            .expect("claim")
+    );
     assert_eq!(delivery_rows(&s.db).await[0].status, "sending");
 
     recover_and_reconcile(&s.memory).await;
@@ -514,7 +541,11 @@ async fn reconciliation_stages_missing_deliveries() {
     assert!(delivery_rows(&s.db).await.is_empty());
 
     recover_and_reconcile(&s.memory).await;
-    assert_eq!(delivery_rows(&s.db).await.len(), 1, "missing row reconciled");
+    assert_eq!(
+        delivery_rows(&s.db).await.len(),
+        1,
+        "missing row reconciled"
+    );
     assert_eq!(delivery_rows(&s.db).await[0].task_id, task_id);
     assert_eq!(delivery_rows(&s.db).await[0].run_seq, run_seq);
 }
@@ -527,7 +558,12 @@ async fn ineligible_runs_and_legacy_projects_stage_nothing() {
 
     // Cancelled run generation.
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "canceled").await;
-    assert_eq!(enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue"), 0);
+    assert_eq!(
+        enqueue_for_run(&s.db, task_id, run_seq)
+            .await
+            .expect("enqueue"),
+        0
+    );
 
     // Merge-only generation: settled without a conversation.
     let draft = WorkTaskDraft {
@@ -537,8 +573,11 @@ async fn ineligible_runs_and_legacy_projects_stage_nothing() {
             "display_text": "merge only",
             "prompt_blocks": [{"type":"text","text":"merge only"}],
         }),
+        task_kind: Default::default(),
     };
-    let created = work_task_service::create(&s.db.conn, draft).await.expect("create");
+    let created = work_task_service::create(&s.db.conn, draft)
+        .await
+        .expect("create");
     let seq = work_task_service::claim_for_run(
         &s.db.conn,
         created.id,
@@ -551,7 +590,12 @@ async fn ineligible_runs_and_legacy_projects_stage_nothing() {
     specos_runtime_service::update_run_state(&s.db.conn, created.id, seq, "review", None, true)
         .await
         .expect("settle");
-    assert_eq!(enqueue_for_run(&s.db, created.id, seq).await.expect("enqueue"), 0);
+    assert_eq!(
+        enqueue_for_run(&s.db, created.id, seq)
+            .await
+            .expect("enqueue"),
+        0
+    );
     assert!(delivery_rows(&s.db).await.is_empty());
 }
 
@@ -559,7 +603,12 @@ async fn ineligible_runs_and_legacy_projects_stage_nothing() {
 async fn legacy_project_without_memory_provider_stages_nothing() {
     let s = setup_scenario("T03E", vec![]).await; // no providers at all
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    assert_eq!(enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue"), 0);
+    assert_eq!(
+        enqueue_for_run(&s.db, task_id, run_seq)
+            .await
+            .expect("enqueue"),
+        0
+    );
     assert!(delivery_rows(&s.db).await.is_empty());
     assert_eq!(deliver_due(&s.memory).await.expect("deliver"), 0);
     assert!(
@@ -594,7 +643,9 @@ async fn migration_adds_memory_evidence_column() {
 async fn staged_payload_respects_the_message_cap() {
     let s = setup_scenario("T03F", vec![provider_config("T03F")]).await;
     let (task_id, run_seq, _) = settle_run(&s, "sess-outbox-1", "review").await;
-    enqueue_for_run(&s.db, task_id, run_seq).await.expect("enqueue");
+    enqueue_for_run(&s.db, task_id, run_seq)
+        .await
+        .expect("enqueue");
     let row = &delivery_rows(&s.db).await[0];
     let payload = row.payload.as_deref().expect("staged payload");
     let messages = serde_json::from_str::<serde_json::Value>(payload).unwrap()["messages"]
