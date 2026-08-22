@@ -1,7 +1,7 @@
 ---
 id: issue-081
 title: "Memory Plugin MVP01 independent verification"
-status: pending_verification
+status: verified
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
