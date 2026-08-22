@@ -72,7 +72,7 @@ mod tauri_app {
         conversations, custom_skills as custom_skills_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
         folder_links, folders, logging as logging_commands, mcp as mcp_commands,
-        model_provider as model_provider_commands, notification,
+        memory as memory_commands, model_provider as model_provider_commands, notification,
         office_tools as office_tools_commands, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
         remote_proxy as remote_proxy_commands, remote_workspace as remote_workspace_commands,
@@ -247,6 +247,10 @@ mod tauri_app {
             // same download progress; lets the upgrade UI survive navigation.
             .manage(crate::update::new_update_state_handle())
             .setup(|app| {
+                #[cfg(target_os = "macos")]
+                crate::product::apply_macos_runtime_identity()
+                    .map_err(std::io::Error::other)?;
+
                 let app_data_dir = app.path().app_data_dir()?;
 
                 // Unify the data root across every consumer:
@@ -1405,6 +1409,10 @@ mod tauri_app {
                 specos_control_commands::specos_work_task_handoff_save,
                 specos_control_commands::specos_work_task_integration_plan,
                 specos_control_commands::specos_work_task_integration_refresh,
+                memory_commands::specos_memory_provider_test,
+                memory_commands::specos_memory_delivery_list,
+                memory_commands::specos_memory_delivery_retry,
+                memory_commands::specos_memory_recall_preview,
                 code_intelligence_commands::code_intelligence_get_state,
                 code_intelligence_commands::code_intelligence_install,
                 code_intelligence_commands::code_intelligence_set_enabled,

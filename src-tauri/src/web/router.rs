@@ -389,10 +389,7 @@ pub fn build_router(
         .route("/git_pull", post(handlers::git::git_pull))
         .route("/git_push", post(handlers::git::git_push))
         .route("/git_fetch", post(handlers::git::git_fetch))
-        .route(
-            "/git_update_branch",
-            post(handlers::git::git_update_branch),
-        )
+        .route("/git_update_branch", post(handlers::git::git_update_branch))
         .route("/git_commit", post(handlers::git::git_commit))
         .route("/git_fetch_remote", post(handlers::git::git_fetch_remote))
         .route("/git_delete_branch", post(handlers::git::git_delete_branch))
@@ -658,10 +655,7 @@ pub fn build_router(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
         )
-        .route(
-            "/acp_goal_control",
-            post(handlers::acp::acp_goal_control),
-        )
+        .route("/acp_goal_control", post(handlers::acp::acp_goal_control))
         .route(
             "/acp_describe_agent_options",
             post(handlers::acp::acp_describe_agent_options),
@@ -1211,7 +1205,10 @@ pub fn build_router(
             "/automation_list",
             post(handlers::automation::automation_list),
         )
-        .route("/automation_get", post(handlers::automation::automation_get))
+        .route(
+            "/automation_get",
+            post(handlers::automation::automation_get),
+        )
         .route(
             "/automation_runs",
             post(handlers::automation::automation_runs),
@@ -1413,6 +1410,23 @@ pub fn build_router(
         .route(
             "/specos_work_task_integration_refresh",
             post(handlers::specos_control::integration_refresh),
+        )
+        // ─── SpecOS Memory Provider operations (issue-080) ───
+        .route(
+            "/specos_memory_provider_test",
+            post(handlers::memory::provider_test),
+        )
+        .route(
+            "/specos_memory_delivery_list",
+            post(handlers::memory::delivery_list),
+        )
+        .route(
+            "/specos_memory_delivery_retry",
+            post(handlers::memory::delivery_retry),
+        )
+        .route(
+            "/specos_memory_recall_preview",
+            post(handlers::memory::recall_preview),
         )
         .route(
             "/code_intelligence_get_state",

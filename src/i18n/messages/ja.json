@@ -1432,8 +1432,8 @@
     "loadFailed": "読み込みに失敗しました: {message}"
   },
   "LoginPage": {
-    "documentTitle": "ログイン - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "ログイン - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "デスクトップアプリに接続するためのアクセストークンを入力してください",
     "tokenPlaceholder": "アクセストークン",
     "connect": "接続",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "メモリー",
+      "unconfigured": "メモリープロバイダーが未設定です",
+      "unconfiguredHint": ".codeg/context.yaml に kind: memory プロバイダーを追加するとキャプチャとリコールが有効になります。",
+      "testTitle": "プロバイダー接続テスト",
+      "testHint": "ゲートウェイのヘルスエンドポイントを確認し、キャプチャに必要な厳密な固定バージョンを検証します。",
+      "provider": "プロバイダー",
+      "runTest": "接続をテスト",
+      "testFailed": "テスト失敗：{detail}",
+      "testResult": "接続テスト結果",
+      "status": {
+        "healthy": "正常",
+        "degraded": "劣化",
+        "blocked": "ブロック"
+      },
+      "latency": "{ms} ミリ秒",
+      "versionGate": "ゲートウェイ {version} — キャプチャゲート：{state}",
+      "gate": {
+        "match": "合格",
+        "mismatch": "非対応"
+      },
+      "previewTitle": "リコールプレビュー",
+      "previewHint": "検査専用の L1/L3 ライブ検索です。パッケージは作成されません。",
+      "previewPlaceholder": "検索クエリ",
+      "previewRun": "プレビュー",
+      "previewEmpty": "このクエリに一致するメモリはありません。",
+      "previewResults": "リコールプレビュー結果",
+      "score": "スコア {value}",
+      "deliveriesTitle": "キャプチャ配信",
+      "deliveriesHint": "決済済みの各実行世代につき 1 行。ペイロード本文は表示されません。",
+      "deliveriesRefresh": "配信を更新",
+      "deliveriesEmpty": "キャプチャ配信はまだありません。",
+      "deliveryRow": "{provider} · タスク #{task} · 実行 {run}",
+      "attempts": "試行 {count} 回",
+      "accepted": "受理 {count} 件",
+      "delivery": {
+        "queued": "待機中",
+        "sending": "送信中",
+        "delivered": "配信済み",
+        "failed": "失敗"
+      },
+      "retryDelivery": "再試行",
+      "deliveriesError": "配信を更新できませんでした：{detail}"
+    },
     "codebase": {
       "title": "コードベース",
       "unavailable": "コードインテリジェンスを利用できません",

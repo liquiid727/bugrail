@@ -1353,6 +1353,8 @@ export type WorkTaskStatus =
   | "failed"
   | "canceled"
 
+export type WorkTaskKind = "implementation" | "integration"
+
 /** The captured composer snapshot stored in `work_task.config`. Optional
  *  agent/mode/config fields are per-task overrides; empty = inherit the
  *  folder's task settings at launch. */
@@ -1374,6 +1376,7 @@ export interface WorkTask {
   id: number
   folder_id: number
   title: string
+  task_kind?: WorkTaskKind
   // Serialized from an opaque JSON column; guard against a null parse fallback.
   config: WorkTaskConfig | null
   status: WorkTaskStatus
@@ -1461,6 +1464,7 @@ export interface WorkTaskDraft {
   folder_id: number
   title: string
   config: WorkTaskConfig
+  task_kind?: WorkTaskKind
 }
 
 /** A saved task blueprint (global; the folder is picked at creation time).
@@ -1694,11 +1698,24 @@ export interface TeamCatalog {
 export interface ContextProviderConfig {
   id: string
   kind: string
+  adapter?: string | null
   endpoint?: string | null
   secretEnv?: string | null
   enabled: boolean
   required: boolean
   capabilities: string[]
+  serviceIdEnv?: string | null
+  teamId?: string | null
+  userIdEnv?: string | null
+  defaultAgentId?: string | null
+  agentIdMap?: Record<string, string>
+  captureEnabled?: boolean
+  recallEnabled?: boolean
+  recallLimit?: number
+  includeCore?: boolean
+  timeoutMs?: number
+  maxCaptureMessageBytes?: number
+  maxCaptureBatchBytes?: number
 }
 
 export interface ContextSourceConfig {
@@ -1761,6 +1778,7 @@ export interface WorkTaskHandoffDraft {
 export interface WorkTaskHandoffInfo extends WorkTaskHandoffDraft {
   taskId: number
   runSeq: number
+  actor: string
   sourceBranch?: string | null
   sourceHead?: string | null
   createdAt: string
@@ -1776,6 +1794,11 @@ export interface IntegrationSourceInfo {
   capturedHead: string | null
   capturedRunSeq: number | null
   hasHandoff: boolean
+  handoffTrusted: boolean
+  gitBranchExists: boolean
+  specCurrent: boolean
+  gatesEligible: boolean
+  eligibilityReason: string | null
   mergeOrder: number
   stale: boolean
 }
@@ -1866,6 +1889,53 @@ export interface ContextOverview {
   providerHealth: ContextProviderHealth[]
   packages: ContextPackageInfo[]
   activity: ContextActivityInfo[]
+}
+
+// --- Memory Provider operations (mirror of src-tauri/src/commands/memory.rs) ---
+
+export interface MemoryProviderTestResult {
+  providerId: string
+  status: "healthy" | "degraded" | "blocked"
+  version: string | null
+  /** True only when the Gateway reported the exact patched pin. */
+  versionMatch: boolean
+  latencyMs: number | null
+  /** Stable error class key (`memory.*`) when status is not healthy. */
+  errorKey: string | null
+}
+
+export interface MemoryDeliveryInfo {
+  id: number
+  providerId: string
+  folderId: number
+  taskId: number
+  runSeq: number
+  status: "queued" | "sending" | "delivered" | "failed"
+  attempts: number
+  retryable: boolean
+  acceptedCount: number | null
+  sourceCount: number
+  payloadHash: string
+  safeErrorCode: string | null
+  safeErrorMessage: string | null
+  createdAt: string
+  updatedAt: string
+  deliveredAt: string | null
+}
+
+export interface MemoryRecallPreviewHit {
+  layer: "l1" | "l3"
+  remoteId: string
+  score: number | null
+  contentHash: string
+  /** Truncated (~200 chars) remote content; rendered as untrusted text. */
+  preview: string
+}
+
+export interface MemoryRecallPreview {
+  providerId: string
+  queryHash: string
+  hits: MemoryRecallPreviewHit[]
 }
 
 // --- Code Intelligence (mirror of src-tauri/src/code_intelligence + commands) ---

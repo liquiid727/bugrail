@@ -1432,8 +1432,8 @@
     "loadFailed": "فشل التحميل: {message}"
   },
   "LoginPage": {
-    "documentTitle": "تسجيل الدخول - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "تسجيل الدخول - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "أدخل رمز الوصول للاتصال بتطبيق سطح المكتب",
     "tokenPlaceholder": "رمز الوصول",
     "connect": "اتصال",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "الذاكرة",
+      "unconfigured": "لا يوجد مزيف ذاكرة مهيأ",
+      "unconfiguredHint": "أضف مزودًا بالنوع kind: memory في .codeg/context.yaml لتمكين الالتقاط والاسترجاع.",
+      "testTitle": "اختبار المزود",
+      "testHint": "يفحص نقطة الصحة للبوابة ويتحقق من الإصدار المثبت بالضبط المطلوب للالتقاط.",
+      "provider": "المزود",
+      "runTest": "اختبار الاتصال",
+      "testFailed": "فشل الاختبار: {detail}",
+      "testResult": "نتيجة اختبار الاتصال",
+      "status": {
+        "healthy": "سليم",
+        "degraded": "متدهور",
+        "blocked": "محجوب"
+      },
+      "latency": "{ms} مللي ثانية",
+      "versionGate": "البوابة {version} — بوابة الالتقاط: {state}",
+      "gate": {
+        "match": "ناجحة",
+        "mismatch": "غير مدعومة"
+      },
+      "previewTitle": "معاينة الاسترجاع",
+      "previewHint": "يشغّل استعلام L1/L3 مباشرًا للفحص فقط. لا يتم إنشاء أي حزمة.",
+      "previewPlaceholder": "استعلام الاسترجاع",
+      "previewRun": "معاينة",
+      "previewEmpty": "لا نتائج ذاكرة لهذا الاستعلام.",
+      "previewResults": "نتائج معاينة الاسترجاع",
+      "score": "النتيجة {value}",
+      "deliveriesTitle": "تسليمات الالتقاط",
+      "deliveriesHint": "صف واحد لكل جيل تشغيل تمت تسويته. لا تُعرض حمولات الرسائل مطلقًا.",
+      "deliveriesRefresh": "تحديث التسليمات",
+      "deliveriesEmpty": "لا توجد تسليمات التقاط بعد.",
+      "deliveryRow": "{provider} · المهمة #{task} · التشغيل {run}",
+      "attempts": "{count} محاولة",
+      "accepted": "تم قبول {count}",
+      "delivery": {
+        "queued": "في الانتظار",
+        "sending": "قيد الإرسال",
+        "delivered": "تم التسليم",
+        "failed": "فشل"
+      },
+      "retryDelivery": "إعادة المحاولة",
+      "deliveriesError": "تعذر تحديث التسليمات: {detail}"
+    },
     "codebase": {
       "title": "قاعدة الشيفرة",
       "unavailable": "ذكاء الشيفرة غير متاح",

@@ -44,9 +44,7 @@ function overview(overrides?: Partial<ContextOverview>): ContextOverview {
         {
           id: "default",
           name: "Project essentials",
-          sources: [
-            { path: "AGENTS.md", required: false, kind: "rules" },
-          ],
+          sources: [{ path: "AGENTS.md", required: false, kind: "rules" }],
           providerIds: ["local"],
           maxItems: 16,
           maxBytes: 4096,
@@ -114,7 +112,9 @@ describe("ContextPage states (issues 053/055/058/060)", () => {
     expect(screen.getByText("healthy")).toBeInTheDocument()
     await userEvent.click(screen.getByRole("tab", { name: "Loadouts" }))
     expect(screen.getByDisplayValue("16")).toBeInTheDocument()
-    expect(screen.getByDisplayValue("AGENTS.md | rules | optional")).toBeInTheDocument()
+    expect(
+      screen.getByDisplayValue("AGENTS.md | rules | optional")
+    ).toBeInTheDocument()
   })
 
   it("shows degraded provider banner without replacing last-good data", async () => {
@@ -211,7 +211,9 @@ describe("ContextPage states (issues 053/055/058/060)", () => {
 
   it("keeps last-good snapshot when refresh fails", async () => {
     renderPage()
-    expect(await screen.findByRole("heading", { name: "Context" })).toBeInTheDocument()
+    expect(
+      await screen.findByRole("heading", { name: "Context" })
+    ).toBeInTheDocument()
     api.specosContextOverview.mockRejectedValueOnce(new Error("socket closed"))
     await userEvent.click(screen.getByRole("button", { name: /Refresh/i }))
     await waitFor(() => {

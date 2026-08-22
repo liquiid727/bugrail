@@ -37,6 +37,9 @@ import type {
   ContextConfig,
   ContextOverview,
   ContextPackageInfo,
+  MemoryDeliveryInfo,
+  MemoryProviderTestResult,
+  MemoryRecallPreview,
   CodeIntelState,
   CodeIntelInstallState,
   WorkTaskRunInfo,
@@ -3433,6 +3436,57 @@ export async function specosContextPackageGet(
   id: string
 ): Promise<ContextPackageInfo> {
   return getTransport().call("specos_context_package_get", { id })
+}
+
+// Memory Provider operations (issue-080, BUGRAIL-SPECOS-017 R06)
+
+export async function specosMemoryProviderTest(
+  folderId: number,
+  providerId: string
+): Promise<MemoryProviderTestResult> {
+  return getTransport().call("specos_memory_provider_test", {
+    folderId,
+    providerId,
+  })
+}
+
+export async function specosMemoryDeliveryList(
+  folderId: number,
+  taskId?: number | null,
+  limit?: number
+): Promise<MemoryDeliveryInfo[]> {
+  return getTransport().call("specos_memory_delivery_list", {
+    folderId,
+    taskId: taskId ?? null,
+    limit: limit ?? null,
+  })
+}
+
+export async function specosMemoryDeliveryRetry(
+  deliveryId: number
+): Promise<MemoryDeliveryInfo> {
+  return getTransport().call("specos_memory_delivery_retry", {
+    deliveryId,
+    providerId: null,
+    taskId: null,
+    runSeq: null,
+  })
+}
+
+export async function specosMemoryRecallPreview(
+  folderId: number,
+  providerId: string,
+  query: string,
+  limit?: number,
+  includeCore?: boolean
+): Promise<MemoryRecallPreview> {
+  return getTransport().call("specos_memory_recall_preview", {
+    folderId,
+    providerId,
+    query,
+    limit: limit ?? null,
+    includeCore: includeCore ?? null,
+  })
 }
 
 export async function specosWorkTaskRuns(

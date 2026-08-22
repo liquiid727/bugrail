@@ -1432,8 +1432,8 @@
     "loadFailed": "Load failed: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Login - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "Login - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "Enter your access token to connect to the desktop app",
     "tokenPlaceholder": "Access Token",
     "connect": "Connect",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "Memory",
+      "unconfigured": "No Memory provider configured",
+      "unconfiguredHint": "Add a kind: memory provider in .codeg/context.yaml to use capture and recall.",
+      "testTitle": "Provider test",
+      "testHint": "Probes the gateway health endpoint and verifies the exact pinned version required for capture.",
+      "provider": "Provider",
+      "runTest": "Test connection",
+      "testFailed": "Test failed: {detail}",
+      "testResult": "Connection test result",
+      "status": {
+        "healthy": "healthy",
+        "degraded": "degraded",
+        "blocked": "blocked"
+      },
+      "latency": "{ms} ms",
+      "versionGate": "Gateway {version} — capture gate: {state}",
+      "gate": {
+        "match": "passed",
+        "mismatch": "not supported"
+      },
+      "previewTitle": "Recall preview",
+      "previewHint": "Runs a live L1/L3 recall query for inspection only. No package is created.",
+      "previewPlaceholder": "Recall query",
+      "previewRun": "Preview",
+      "previewEmpty": "No memory hits for this query.",
+      "previewResults": "Recall preview results",
+      "score": "score {value}",
+      "deliveriesTitle": "Capture deliveries",
+      "deliveriesHint": "One row per settled run generation. Payload bodies are never shown.",
+      "deliveriesRefresh": "Refresh deliveries",
+      "deliveriesEmpty": "No capture deliveries yet.",
+      "deliveryRow": "{provider} · task #{task} · run {run}",
+      "attempts": "{count} attempt(s)",
+      "accepted": "{count} accepted",
+      "delivery": {
+        "queued": "queued",
+        "sending": "sending",
+        "delivered": "delivered",
+        "failed": "failed"
+      },
+      "retryDelivery": "Retry",
+      "deliveriesError": "Could not refresh deliveries: {detail}"
+    },
     "codebase": {
       "title": "Codebase",
       "unavailable": "Code Intelligence unavailable",

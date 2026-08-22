@@ -1432,8 +1432,8 @@
     "loadFailed": "불러오기 실패: {message}"
   },
   "LoginPage": {
-    "documentTitle": "로그인 - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "로그인 - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "데스크톱 앱에 연결하려면 액세스 토큰을 입력하세요",
     "tokenPlaceholder": "액세스 토큰",
     "connect": "연결",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "메모리",
+      "unconfigured": "메모리 공급자가 구성되지 않았습니다",
+      "unconfiguredHint": ".codeg/context.yaml에 kind: memory 공급자를 추가하면 캡처와 리콜을 사용할 수 있습니다.",
+      "testTitle": "공급자 테스트",
+      "testHint": "게이트웨이 상태 엔드포인트를 검사하고 캡처에 필요한 정확한 고정 버전을 확인합니다.",
+      "provider": "공급자",
+      "runTest": "연결 테스트",
+      "testFailed": "테스트 실패: {detail}",
+      "testResult": "연결 테스트 결과",
+      "status": {
+        "healthy": "정상",
+        "degraded": "성능 저하",
+        "blocked": "차단됨"
+      },
+      "latency": "{ms}밀리초",
+      "versionGate": "게이트웨이 {version} — 캡처 게이트: {state}",
+      "gate": {
+        "match": "통과",
+        "mismatch": "지원 안 함"
+      },
+      "previewTitle": "리콜 미리보기",
+      "previewHint": "검사 전용 라이브 L1/L3 검색입니다. 패키지는 생성되지 않습니다.",
+      "previewPlaceholder": "검색 질의",
+      "previewRun": "미리보기",
+      "previewEmpty": "이 질의에 일치하는 메모리가 없습니다.",
+      "previewResults": "리콜 미리보기 결과",
+      "score": "점수 {value}",
+      "deliveriesTitle": "캡처 전달",
+      "deliveriesHint": "정산된 각 실행 세대당 한 행입니다. 페이로드 본문은 표시되지 않습니다.",
+      "deliveriesRefresh": "전달 새로 고침",
+      "deliveriesEmpty": "아직 캡처 전달이 없습니다.",
+      "deliveryRow": "{provider} · 작업 #{task} · 실행 {run}",
+      "attempts": "{count}회 시도",
+      "accepted": "{count}건 수락",
+      "delivery": {
+        "queued": "대기 중",
+        "sending": "전송 중",
+        "delivered": "전달됨",
+        "failed": "실패"
+      },
+      "retryDelivery": "재시도",
+      "deliveriesError": "전달을 새로 고침하지 못했습니다: {detail}"
+    },
     "codebase": {
       "title": "코드베이스",
       "unavailable": "코드 인텔리전스를 사용할 수 없음",

@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
+  BrainCircuit,
   Database,
   Loader2,
-  Plus,
+  Play,
   RefreshCw,
   Save,
   ShieldAlert,
@@ -22,6 +23,10 @@ import {
   codeIntelligenceSetEnabled,
   specosContextConfigSave,
   specosContextOverview,
+  specosMemoryDeliveryList,
+  specosMemoryDeliveryRetry,
+  specosMemoryProviderTest,
+  specosMemoryRecallPreview,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
@@ -30,6 +35,9 @@ import type {
   ContextLoadout,
   ContextOverview,
   ContextProviderConfig,
+  MemoryDeliveryInfo,
+  MemoryProviderTestResult,
+  MemoryRecallPreview,
 } from "@/lib/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -107,30 +115,6 @@ export function ContextPage() {
           }
         : current
     )
-  }
-  const addProvider = () => {
-    setData((current) => {
-      if (!current) return current
-      const n = current.config.providers.length + 1
-      return {
-        ...current,
-        config: {
-          ...current.config,
-          providers: [
-            ...current.config.providers,
-            {
-              id: `tencent-memory-${n}`,
-              kind: "tencent-memory",
-              endpoint: "http://127.0.0.1:8125",
-              secretEnv: null,
-              enabled: true,
-              required: false,
-              capabilities: ["memory", "wiki", "skill", "codegraph"],
-            },
-          ],
-        },
-      }
-    })
   }
   const updateLoadout = (id: string, patch: Partial<ContextLoadout>) => {
     setData((current) =>
@@ -213,6 +197,7 @@ export function ContextPage() {
         <TabsList>
           <TabsTrigger value="overview">{t("overview")}</TabsTrigger>
           <TabsTrigger value="codebase">{t("codebase.title")}</TabsTrigger>
+          <TabsTrigger value="memory">{t("memory.title")}</TabsTrigger>
           <TabsTrigger value="providers">{t("providers")}</TabsTrigger>
           <TabsTrigger value="loadouts">{t("loadouts")}</TabsTrigger>
           <TabsTrigger value="activity">{t("activity")}</TabsTrigger>
@@ -270,12 +255,16 @@ export function ContextPage() {
         <TabsContent value="codebase" className="min-h-0 overflow-auto pt-3">
           <CodebaseSection folderId={activeFolderId} />
         </TabsContent>
+        <TabsContent value="memory" className="min-h-0 overflow-auto pt-3">
+          <MemorySection
+            folderId={activeFolderId}
+            providers={data.config.providers.filter(
+              (provider) => provider.kind === "memory"
+            )}
+          />
+        </TabsContent>
         <TabsContent value="providers" className="min-h-0 overflow-auto pt-3">
-          <div className="mb-3 flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={addProvider}>
-              <Plus />
-              {t("addProvider")}
-            </Button>
+          <div className="mb-3 flex justify-end">
             <Button size="sm" onClick={() => void save()} disabled={saving}>
               {saving ? <Loader2 className="animate-spin" /> : <Save />}
               {t("save")}
@@ -739,6 +728,360 @@ function CodebaseSection({ folderId }: { folderId: number }) {
               ))}
             </ul>
           )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function MemorySection({
+  folderId,
+  providers,
+}: {
+  folderId: number
+  providers: ContextProviderConfig[]
+}) {
+  const t = useTranslations("ContextSystem.memory")
+  const [providerId, setProviderId] = useState<string | null>(null)
+  const activeProvider =
+    providers.find((provider) => provider.id === providerId) ?? providers[0]
+
+  // ── Provider test ──
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<MemoryProviderTestResult | null>(
+    null
+  )
+  const [testError, setTestError] = useState<string | null>(null)
+
+  // ── Delivery list ──
+  const [deliveries, setDeliveries] = useState<MemoryDeliveryInfo[] | null>(
+    null
+  )
+  const [deliveriesLoading, setDeliveriesLoading] = useState(true)
+  const [deliveriesError, setDeliveriesError] = useState<string | null>(null)
+  const [retryingId, setRetryingId] = useState<number | null>(null)
+
+  // ── Recall preview ──
+  const [query, setQuery] = useState("")
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<MemoryRecallPreview | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+
+  const loadDeliveries = useCallback(async () => {
+    setDeliveriesLoading(true)
+    try {
+      setDeliveries(await specosMemoryDeliveryList(folderId))
+      setDeliveriesError(null)
+    } catch (cause) {
+      // Keep last-good rows; surface the transport error beside them.
+      setDeliveriesError(toErrorMessage(cause))
+    } finally {
+      setDeliveriesLoading(false)
+    }
+  }, [folderId])
+
+  useEffect(() => {
+    void loadDeliveries()
+  }, [loadDeliveries])
+
+  useEffect(() => {
+    if (activeProvider && providerId == null) setProviderId(activeProvider.id)
+  }, [activeProvider, providerId])
+
+  const runTest = async () => {
+    if (!activeProvider) return
+    setTesting(true)
+    setTestError(null)
+    try {
+      setTestResult(await specosMemoryProviderTest(folderId, activeProvider.id))
+    } catch (cause) {
+      // Last-good result is retained; the failure is shown next to it.
+      setTestError(toErrorMessage(cause))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const retry = async (id: number) => {
+    setRetryingId(id)
+    try {
+      const updated = await specosMemoryDeliveryRetry(id)
+      setDeliveries(
+        (current) =>
+          current?.map((row) => (row.id === updated.id ? updated : row)) ?? null
+      )
+    } catch (cause) {
+      toast.error(toErrorMessage(cause))
+    } finally {
+      setRetryingId(null)
+    }
+  }
+
+  const runPreview = async () => {
+    if (!activeProvider || !query.trim()) return
+    setPreviewing(true)
+    setPreviewError(null)
+    try {
+      setPreview(
+        await specosMemoryRecallPreview(folderId, activeProvider.id, query)
+      )
+    } catch (cause) {
+      setPreview(null)
+      setPreviewError(toErrorMessage(cause))
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  if (providers.length === 0)
+    return (
+      <Empty title={t("unconfigured")} body={t("unconfiguredHint")} compact />
+    )
+
+  const statusBadge = (result: MemoryProviderTestResult) => (
+    <Badge
+      variant={
+        result.status === "healthy"
+          ? "secondary"
+          : result.status === "blocked"
+            ? "outline"
+            : "destructive"
+      }
+    >
+      {t(`status.${result.status}`)}
+    </Badge>
+  )
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {/* Provider connection test */}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BrainCircuit className="size-4" />
+            {t("testTitle")}
+          </CardTitle>
+          <CardDescription>{t("testHint")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {providers.length > 1 ? (
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              {t("provider")}
+              <select
+                className="h-9 rounded-md border bg-transparent px-2 text-sm"
+                value={activeProvider?.id ?? ""}
+                onChange={(event) => setProviderId(event.target.value)}
+              >
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <Button
+            size="sm"
+            onClick={() => void runTest()}
+            disabled={testing || !activeProvider}
+          >
+            {testing ? <Loader2 className="animate-spin" /> : <Play />}
+            {t("runTest")}
+          </Button>
+          {testError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {t("testFailed", { detail: testError })}
+            </p>
+          ) : null}
+          {testResult ? (
+            <div
+              className="space-y-1 rounded-xl border p-3 text-sm"
+              aria-label={t("testResult")}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {statusBadge(testResult)}
+                {testResult.latencyMs != null ? (
+                  <span className="text-xs text-muted-foreground">
+                    {t("latency", { ms: testResult.latencyMs })}
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t("versionGate", {
+                  version: testResult.version ?? "?",
+                  state: testResult.versionMatch
+                    ? t("gate.match")
+                    : t("gate.mismatch"),
+                })}
+              </div>
+              {testResult.errorKey ? (
+                <div className="font-mono text-xs text-muted-foreground">
+                  {testResult.errorKey}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Recall preview */}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>{t("previewTitle")}</CardTitle>
+          <CardDescription>{t("previewHint")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <form
+            className="flex flex-col gap-2 sm:flex-row"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void runPreview()
+            }}
+          >
+            <Input
+              value={query}
+              placeholder={t("previewPlaceholder")}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label={t("previewPlaceholder")}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              variant="outline"
+              disabled={previewing || !query.trim() || !activeProvider}
+            >
+              {previewing ? <Loader2 className="animate-spin" /> : null}
+              {t("previewRun")}
+            </Button>
+          </form>
+          {previewError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {previewError}
+            </p>
+          ) : null}
+          {preview ? (
+            preview.hits.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t("previewEmpty")}
+              </p>
+            ) : (
+              <ul className="space-y-2" aria-label={t("previewResults")}>
+                {preview.hits.map((hit) => (
+                  <li
+                    key={`${hit.layer}-${hit.remoteId}-${hit.contentHash}`}
+                    className="rounded-xl border p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <Badge variant="outline">{hit.layer.toUpperCase()}</Badge>
+                      <span className="font-mono text-muted-foreground">
+                        {hit.remoteId}
+                      </span>
+                      {hit.score != null ? (
+                        <span className="text-muted-foreground">
+                          {t("score", { value: hit.score.toFixed(3) })}
+                        </span>
+                      ) : null}
+                    </div>
+                    {/* Remote content: plain untrusted text, already
+                        truncated server-side to ~200 chars. */}
+                    <p className="mt-1 break-words text-sm">{hit.preview}</p>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Capture deliveries */}
+      <Card size="sm" className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-2">
+            {t("deliveriesTitle")}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadDeliveries()}
+              disabled={deliveriesLoading}
+              aria-label={t("deliveriesRefresh")}
+            >
+              {deliveriesLoading ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <RefreshCw />
+              )}
+            </Button>
+          </CardTitle>
+          <CardDescription>{t("deliveriesHint")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {deliveriesLoading && deliveries == null ? (
+            <div className="space-y-2" aria-busy="true">
+              <Skeleton className="h-16 rounded-xl" />
+              <Skeleton className="h-16 rounded-xl" />
+            </div>
+          ) : deliveries == null || deliveries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("deliveriesEmpty")}
+            </p>
+          ) : (
+            <ul className="space-y-2" aria-label={t("deliveriesTitle")}>
+              {deliveries.map((row) => (
+                <li
+                  key={row.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium">
+                      {t("deliveryRow", {
+                        provider: row.providerId,
+                        task: row.taskId,
+                        run: row.runSeq,
+                      })}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {t("attempts", { count: row.attempts })}
+                      {row.acceptedCount != null
+                        ? ` · ${t("accepted", { count: row.acceptedCount })}`
+                        : ""}
+                      {row.safeErrorCode ? ` · ${row.safeErrorCode}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={
+                        row.status === "delivered"
+                          ? "secondary"
+                          : row.status === "failed"
+                            ? "destructive"
+                            : "outline"
+                      }
+                    >
+                      {t(`delivery.${row.status}`)}
+                    </Badge>
+                    {row.status === "failed" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void retry(row.id)}
+                        disabled={retryingId === row.id}
+                      >
+                        {retryingId === row.id ? (
+                          <Loader2 className="animate-spin" />
+                        ) : null}
+                        {t("retryDelivery")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {deliveriesError ? (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {t("deliveriesError", { detail: deliveriesError })}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     </div>

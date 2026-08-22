@@ -1432,8 +1432,8 @@
     "loadFailed": "Laden fehlgeschlagen: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Anmelden - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "Anmelden - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "Gib dein Zugriffstoken ein, um dich mit der Desktop-App zu verbinden",
     "tokenPlaceholder": "Zugriffstoken",
     "connect": "Verbinden",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "Speicher",
+      "unconfigured": "Kein Speicher-Provider konfiguriert",
+      "unconfiguredHint": "Füge in .codeg/context.yaml einen Provider mit kind: memory hinzu, um Erfassung und Abruf zu nutzen.",
+      "testTitle": "Provider-Test",
+      "testHint": "Prüft den Health-Endpunkt des Gateways und verifiziert die für die Erfassung exakt gepinnte Version.",
+      "provider": "Provider",
+      "runTest": "Verbindung testen",
+      "testFailed": "Test fehlgeschlagen: {detail}",
+      "testResult": "Ergebnis des Verbindungstests",
+      "status": {
+        "healthy": "fehlerfrei",
+        "degraded": "degradiert",
+        "blocked": "blockiert"
+      },
+      "latency": "{ms} ms",
+      "versionGate": "Gateway {version} — Erfassungsgate: {state}",
+      "gate": {
+        "match": "bestanden",
+        "mismatch": "nicht unterstützt"
+      },
+      "previewTitle": "Abruf-Vorschau",
+      "previewHint": "Führt eine Live-L1/L3-Abfrage nur zur Prüfung aus. Es wird kein Paket erzeugt.",
+      "previewPlaceholder": "Abrufabfrage",
+      "previewRun": "Vorschau",
+      "previewEmpty": "Keine Speichertreffer für diese Abfrage.",
+      "previewResults": "Ergebnisse der Abruf-Vorschau",
+      "score": "Score {value}",
+      "deliveriesTitle": "Erfassungsauslieferungen",
+      "deliveriesHint": "Eine Zeile je abgerechneter Laufgeneration. Payload-Inhalte werden nie angezeigt.",
+      "deliveriesRefresh": "Auslieferungen aktualisieren",
+      "deliveriesEmpty": "Noch keine Erfassungsauslieferungen.",
+      "deliveryRow": "{provider} · Aufgabe #{task} · Lauf {run}",
+      "attempts": "{count} Versuch(e)",
+      "accepted": "{count} akzeptiert",
+      "delivery": {
+        "queued": "in Warteschlange",
+        "sending": "wird gesendet",
+        "delivered": "ausgeliefert",
+        "failed": "fehlgeschlagen"
+      },
+      "retryDelivery": "Erneut versuchen",
+      "deliveriesError": "Auslieferungen konnten nicht aktualisiert werden: {detail}"
+    },
     "codebase": {
       "title": "Codebasis",
       "unavailable": "Code-Intelligenz nicht verfügbar",

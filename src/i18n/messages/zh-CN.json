@@ -1432,8 +1432,8 @@
     "loadFailed": "加载失败：{message}"
   },
   "LoginPage": {
-    "documentTitle": "登录 - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "登录 - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "输入访问 Token 以连接到桌面端",
     "tokenPlaceholder": "Access Token",
     "connect": "连接",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "运行",
     "specosContextTab": "上下文",
     "specosHandoffTab": "交接",
+    "specosIntegrationTab": "集成",
+    "specosRefreshIntegration": "刷新计划",
+    "specosIntegrationConflict": "需要恢复合并：{conflicts}",
+    "specosIntegrationNoSources": "尚未配置集成来源任务。",
+    "specosIntegrationNoHead": "未捕获 Git HEAD",
     "specosContractSaved": "任务契约已保存",
     "specosReasonRequired": "必须填写决策原因",
     "specosDecisionSaved": "门禁决策已保存",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider ID（逗号分隔）",
     "sourcesEditor": "有序来源",
     "sourcesHint": "每行一项：路径 | 类型 | required 或 optional",
+
+    "memory": {
+      "title": "记忆",
+      "unconfigured": "尚未配置记忆提供方",
+      "unconfiguredHint": "在 .codeg/context.yaml 中添加 kind: memory 提供方即可启用捕获与召回。",
+      "testTitle": "提供方测试",
+      "testHint": "探测网关健康端点，并校验捕获所需的精确锁定版本。",
+      "provider": "提供方",
+      "runTest": "测试连接",
+      "testFailed": "测试失败：{detail}",
+      "testResult": "连接测试结果",
+      "status": {
+        "healthy": "健康",
+        "degraded": "降级",
+        "blocked": "受阻"
+      },
+      "latency": "{ms} 毫秒",
+      "versionGate": "网关 {version} — 捕获门禁：{state}",
+      "gate": {
+        "match": "通过",
+        "mismatch": "不支持"
+      },
+      "previewTitle": "召回预览",
+      "previewHint": "仅用于检查的实时 L1/L3 召回查询，不会创建上下文包。",
+      "previewPlaceholder": "召回查询词",
+      "previewRun": "预览",
+      "previewEmpty": "该查询没有命中记忆。",
+      "previewResults": "召回预览结果",
+      "score": "得分 {value}",
+      "deliveriesTitle": "捕获投递",
+      "deliveriesHint": "每个已结算的运行生成一行，绝不展示载荷正文。",
+      "deliveriesRefresh": "刷新投递",
+      "deliveriesEmpty": "暂无捕获投递记录。",
+      "deliveryRow": "{provider} · 任务 #{task} · 运行 {run}",
+      "attempts": "已尝试 {count} 次",
+      "accepted": "已接受 {count} 条",
+      "delivery": {
+        "queued": "排队中",
+        "sending": "发送中",
+        "delivered": "已投递",
+        "failed": "失败"
+      },
+      "retryDelivery": "重试",
+      "deliveriesError": "刷新投递失败：{detail}"
+    },
     "codebase": {
       "title": "代码库",
       "unavailable": "代码智能不可用",

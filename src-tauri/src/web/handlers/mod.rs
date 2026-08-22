@@ -20,6 +20,7 @@ pub mod folders;
 pub mod git;
 pub mod logging;
 pub mod mcp;
+pub mod memory;
 pub mod model_provider;
 pub mod office_tools;
 pub mod office_watch_proxy;

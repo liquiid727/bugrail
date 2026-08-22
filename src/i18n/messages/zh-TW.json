@@ -1432,8 +1432,8 @@
     "loadFailed": "載入失敗：{message}"
   },
   "LoginPage": {
-    "documentTitle": "登入 - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "登入 - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "輸入存取 Token 以連接到桌面端",
     "tokenPlaceholder": "Access Token",
     "connect": "連接",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "記憶",
+      "unconfigured": "尚未設定記憶提供者",
+      "unconfiguredHint": "在 .codeg/context.yaml 中新增 kind: memory 提供者即可啟用擷取與召回。",
+      "testTitle": "提供者測試",
+      "testHint": "探測閘道健康端點，並驗證擷取所需的精確鎖定版本。",
+      "provider": "提供者",
+      "runTest": "測試連線",
+      "testFailed": "測試失敗：{detail}",
+      "testResult": "連線測試結果",
+      "status": {
+        "healthy": "健康",
+        "degraded": "降級",
+        "blocked": "受阻"
+      },
+      "latency": "{ms} 毫秒",
+      "versionGate": "閘道 {version} — 擷取門檻：{state}",
+      "gate": {
+        "match": "通過",
+        "mismatch": "不支援"
+      },
+      "previewTitle": "召回預覽",
+      "previewHint": "僅供檢查的即時 L1/L3 召回查詢，不會建立上下文套件。",
+      "previewPlaceholder": "召回查詢詞",
+      "previewRun": "預覽",
+      "previewEmpty": "此查詢沒有命中記憶。",
+      "previewResults": "召回預覽結果",
+      "score": "得分 {value}",
+      "deliveriesTitle": "擷取投遞",
+      "deliveriesHint": "每個已結算的執行世代一列，絕不顯示酬載內容。",
+      "deliveriesRefresh": "重新整理投遞",
+      "deliveriesEmpty": "尚無擷取投遞紀錄。",
+      "deliveryRow": "{provider} · 任務 #{task} · 執行 {run}",
+      "attempts": "已嘗試 {count} 次",
+      "accepted": "已接受 {count} 則",
+      "delivery": {
+        "queued": "排隊中",
+        "sending": "傳送中",
+        "delivered": "已投遞",
+        "failed": "失敗"
+      },
+      "retryDelivery": "重試",
+      "deliveriesError": "重新整理投遞失敗：{detail}"
+    },
     "codebase": {
       "title": "程式碼庫",
       "unavailable": "程式碼智能不可用",

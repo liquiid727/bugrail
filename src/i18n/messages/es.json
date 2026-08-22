@@ -1432,8 +1432,8 @@
     "loadFailed": "Error al cargar: {message}"
   },
   "LoginPage": {
-    "documentTitle": "Iniciar sesión - Code: Bugrail",
-    "brand": "Code: Bugrail",
+    "documentTitle": "Iniciar sesión - Bugrail",
+    "brand": "Bugrail",
     "subtitle": "Introduce tu token de acceso para conectarte a la aplicación de escritorio",
     "tokenPlaceholder": "Token de acceso",
     "connect": "Conectar",
@@ -4688,6 +4688,11 @@
     "specosRunsTab": "Runs",
     "specosContextTab": "Context",
     "specosHandoffTab": "Handoff",
+    "specosIntegrationTab": "Integration",
+    "specosRefreshIntegration": "Refresh plan",
+    "specosIntegrationConflict": "Merge recovery required: {conflicts}",
+    "specosIntegrationNoSources": "No integration sources are configured.",
+    "specosIntegrationNoHead": "No captured Git head",
     "specosContractSaved": "Task contract saved",
     "specosReasonRequired": "A decision reason is required",
     "specosDecisionSaved": "Gate decision saved",
@@ -5083,6 +5088,51 @@
     "providerIds": "Provider IDs (comma-separated)",
     "sourcesEditor": "Ordered sources",
     "sourcesHint": "One per line: path | kind | required or optional",
+
+    "memory": {
+      "title": "Memoria",
+      "unconfigured": "No hay proveedor de memoria configurado",
+      "unconfiguredHint": "Añade un proveedor kind: memory en .codeg/context.yaml para usar captura y recuperación.",
+      "testTitle": "Prueba del proveedor",
+      "testHint": "Sondea el endpoint de salud de la pasarela y verifica la versión exacta requerida para capturar.",
+      "provider": "Proveedor",
+      "runTest": "Probar conexión",
+      "testFailed": "Prueba fallida: {detail}",
+      "testResult": "Resultado de la prueba de conexión",
+      "status": {
+        "healthy": "correcto",
+        "degraded": "degradado",
+        "blocked": "bloqueado"
+      },
+      "latency": "{ms} ms",
+      "versionGate": "Pasarela {version} — compuerta de captura: {state}",
+      "gate": {
+        "match": "aprobada",
+        "mismatch": "no admitida"
+      },
+      "previewTitle": "Vista previa de recuperación",
+      "previewHint": "Ejecuta una consulta L1/L3 en vivo solo para inspección. No se crea ningún paquete.",
+      "previewPlaceholder": "Consulta de recuperación",
+      "previewRun": "Previsualizar",
+      "previewEmpty": "Sin coincidencias de memoria para esta consulta.",
+      "previewResults": "Resultados de la vista previa",
+      "score": "puntuación {value}",
+      "deliveriesTitle": "Entregas de captura",
+      "deliveriesHint": "Una fila por generación de ejecución liquidada. Nunca se muestran los cuerpos del payload.",
+      "deliveriesRefresh": "Actualizar entregas",
+      "deliveriesEmpty": "Todavía no hay entregas de captura.",
+      "deliveryRow": "{provider} · tarea #{task} · ejecución {run}",
+      "attempts": "{count} intento(s)",
+      "accepted": "{count} aceptados",
+      "delivery": {
+        "queued": "en cola",
+        "sending": "enviando",
+        "delivered": "entregado",
+        "failed": "fallido"
+      },
+      "retryDelivery": "Reintentar",
+      "deliveriesError": "No se pudieron actualizar las entregas: {detail}"
+    },
     "codebase": {
       "title": "Base de código",
       "unavailable": "Inteligencia de código no disponible",
