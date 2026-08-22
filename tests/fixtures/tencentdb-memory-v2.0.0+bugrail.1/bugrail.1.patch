@@ -1,0 +1,54 @@
+From ffabb4ca33ab255aeb9462874953ddb1278d50ac Mon Sep 17 00:00:00 2001
+From: bugrail <fixture@bugrail>
+Date: Sat, 22 Aug 2026 01:41:08 +0800
+Subject: [PATCH] bugrail.1: conversation/add caller-id upsert + /health
+ patched version
+
+---
+ MemoryCore/src/gateway/server.ts    |  4 +++-
+ MemoryCore/src/gateway/v2-router.ts | 14 +++++++++++++-
+ 2 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/MemoryCore/src/gateway/server.ts b/MemoryCore/src/gateway/server.ts
+index ecca673..a727d26 100644
+--- a/MemoryCore/src/gateway/server.ts
++++ b/MemoryCore/src/gateway/server.ts
+@@ -110,7 +110,9 @@ import type { PipelineLogger } from "../utils/pipeline-factory.js";
+ import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+ 
+ const TAG = "[tdai-gateway]";
+-const VERSION = "0.1.0";
++// bugrail.1 patch: /health reports the pinned patch version so BugRail's
++// Memory adapter can gate capture writability on the exact id-upsert contract.
++const VERSION = "v2.0.0+bugrail.1";
+ 
+ // ============================
+ // Console logger (for standalone gateway — no OpenClaw logger available)
+diff --git a/MemoryCore/src/gateway/v2-router.ts b/MemoryCore/src/gateway/v2-router.ts
+index b480552..3778e10 100644
+--- a/MemoryCore/src/gateway/v2-router.ts
++++ b/MemoryCore/src/gateway/v2-router.ts
+@@ -698,7 +698,19 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
+   const ingestBaseMs = Date.now();
+ 
+   for (const [index, msg] of messages.entries()) {
+-    const id = `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
++    // bugrail.1 patch: honor a caller-supplied stable message `id`.
++    // The schema already accepts `id`; vanilla v2.0.0 ignores it and
++    // regenerates a random id, which breaks at-least-once replay. upsertL0
++    // upserts ON CONFLICT(record_id), so replaying a known id set is
++    // idempotent (no duplicate L0 rows, stable accepted ids).
++    const callerId = (msg as { id?: unknown }).id;
++    const id =
++      typeof callerId === "string" &&
++      callerId.length > 0 &&
++      callerId.length <= 64 &&
++      /^[\w:.-]+$/.test(callerId)
++        ? callerId
++        : `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+     const recordedAtMs = ingestBaseMs + index;
+     const record: L0Record = {
+       id,
+-- 
+2.50.1 (Apple Git-155)
+

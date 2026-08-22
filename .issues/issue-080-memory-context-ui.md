@@ -1,7 +1,7 @@
 ---
 id: issue-080
 title: "Memory Provider operations and Context UI"
-status: planned
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -27,3 +27,12 @@ the full upstream MemoryPanel asset/Team/ACL administration surface.
 Cover `T07`, safe rendering from `T06`, all ten locales, responsive/keyboard
 behavior and desktop/server transport parity.
 
+
+### 2026-08-23 status
+
+- Implementation landed in `feat(memory): provider commands and Context
+  UI`: shared command-core, Tauri/Axum registration, Memory tab on the
+  Context page and all ten locale catalogs, with package detail moved to
+  on-demand `specos_context_package_get`.
+- T07 transport parity and UI state coverage recorded in
+  `tests/results/2026-08-22-specos-017-memory-verification.md`.

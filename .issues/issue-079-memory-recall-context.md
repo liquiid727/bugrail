@@ -1,7 +1,7 @@
 ---
 id: issue-079
 title: "Memory recall and Context Package integration"
-status: planned
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -28,3 +28,12 @@ allow the Adapter to compose prompts or implement L0/L2 authoring.
 Cover `T04-T05` and remote-content security in `T06`, including deterministic
 package hashes, empty recall and restart inspection.
 
+
+### 2026-08-23 status
+
+- Implementation landed in `feat(memory): recall integration into context
+  packages` (Context recall normalization, fixed package order, budget and
+  provenance evidence, required/optional failure semantics).
+- T04/T05 oracles pass in `tests/memory_recall_context.rs` and the pinned
+  T08 run (`tests/results/2026-08-22-specos-017-memory-verification.md`)
+  demonstrates capture-to-later-recall after restart.

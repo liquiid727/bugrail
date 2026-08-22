@@ -1,7 +1,7 @@
 ---
 id: issue-081
 title: "Memory Plugin MVP01 independent verification"
-status: planned
+status: pending_verification
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -29,3 +29,16 @@ baseline verification Issues `issue-047`, `issue-053`, `issue-055` and
 `issue-060`: the pinned `v2.0.0+bugrail.1` integration fixture supplies the
 real remote health evidence that `issue-055` T02 lacks, and the shared
 package/inspector evidence covers the remaining inspector oracles.
+
+### 2026-08-22 execution
+
+- Executed the exact Test Spec T01-T08 against deterministic adapters, the
+  fake Gateway and the pinned TencentDB `v2.0.0` + `bugrail.1` fixture
+  (image digest recorded). Evidence:
+  `tests/results/2026-08-22-specos-017-memory-verification.md`.
+- Two defects found and fixed with tests: `parse_hits` now accepts the
+  authoritative `data.items` shape; legacy projects without a Memory
+  provider are no longer auto-injected one (AC08).
+- Aggregated confirmations for `issue-047`, `issue-053`, `issue-055` and
+  `issue-060` are recorded in the same evidence document.
+- Status: `pending_verification` until the evidence record is accepted.
