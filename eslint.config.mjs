@@ -22,6 +22,9 @@ const eslintConfig = defineConfig([
     // `.gitignore` — but flat config has no such default, so without this
     // `pnpm eslint .` fails the repo on files that are not in the repo.
     ".docs/**",
+    // EVE runtime state includes full source snapshots and workflow locks.
+    // It is generated execution data, not another copy of the lint target.
+    ".eve/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,

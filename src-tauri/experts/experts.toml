@@ -409,6 +409,21 @@ ar = "يحدد كيفية اكتشاف واستخدام المهارات في ب
 
 
 [[expert]]
+id = "bugrail-release-management"
+category = "execution"
+icon = "Rocket"
+sort_order = 130
+
+[expert.display_name]
+en = "Bugrail Release Management"
+"zh-CN" = "Bugrail 发布管理"
+
+[expert.description]
+en = "Manages Bugrail versions, updater channels, CI/CD publication, production deployment, and rollback."
+"zh-CN" = "管理 Bugrail 版本、更新通道、CI/CD 发布、生产部署和回滚。"
+
+
+[[expert]]
 id = "writing-skills"
 category = "meta"
 icon = "FileCode2"

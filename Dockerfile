@@ -22,6 +22,12 @@ RUN cargo build --release --bin codeg-server --no-default-features \
 
 # Stage 3: Runtime
 FROM node:24-bookworm-slim
+
+ARG APP_VERSION=dev
+LABEL org.opencontainers.image.title="Bugrail" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.source="https://github.com/liquiid727/bugrail"
+
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     git \

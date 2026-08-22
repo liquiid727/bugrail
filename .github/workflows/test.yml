@@ -39,6 +39,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate release metadata
+        run: pnpm release:check
+
+      - name: Test release metadata tooling
+        run: pnpm test:release
+
       - name: Lint
         run: pnpm eslint .
 

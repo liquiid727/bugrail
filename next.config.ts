@@ -1,6 +1,9 @@
+import { fileURLToPath } from "node:url"
 import type { NextConfig } from "next"
 import createNextIntlPlugin from "next-intl/plugin"
 import { resolveDevAssetPrefix } from "./src/lib/dev-origin"
+
+const projectRoot = fileURLToPath(new URL(".", import.meta.url))
 
 const withNextIntl = createNextIntlPlugin({
   requestConfig: "./src/i18n/request.ts",
@@ -28,7 +31,7 @@ const withNextIntl = createNextIntlPlugin({
 const nextConfig: NextConfig = {
   output: "export",
   turbopack: {
-    root: process.cwd(),
+    root: projectRoot,
   },
   images: {
     unoptimized: true,

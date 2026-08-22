@@ -1,0 +1,26 @@
+{
+  "product": {
+    "name": "Bugrail",
+    "slug": "bugrail",
+    "repository": "liquiid727/bugrail",
+    "bundleIdentifier": "io.liquiid.bugrail"
+  },
+  "version": "0.26.1",
+  "release": {
+    "tagPrefix": "v",
+    "releaseName": "Bugrail",
+    "repositoryUrl": "https://github.com/liquiid727/bugrail",
+    "releasesUrl": "https://github.com/liquiid727/bugrail/releases",
+    "latestReleaseUrl": "https://github.com/liquiid727/bugrail/releases/latest",
+    "updaterManifestUrl": "https://github.com/liquiid727/bugrail/releases/latest/download/latest.json",
+    "downloadBase": "https://github.com/liquiid727/bugrail/releases/latest/download"
+  },
+  "container": {
+    "registry": "ghcr.io",
+    "image": "ghcr.io/liquiid727/bugrail"
+  },
+  "compatibilityArtifacts": {
+    "server": "codeg-server",
+    "mcp": "codeg-mcp"
+  }
+}
