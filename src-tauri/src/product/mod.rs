@@ -15,7 +15,7 @@ pub struct ProductManifest {
 }
 
 pub const PRODUCT_MANIFEST: ProductManifest = ProductManifest {
-    display_name: "Code: Bugrail",
+    display_name: "Bugrail",
     bundle_name: "Bugrail",
     bundle_identifier: "io.liquiid.bugrail",
     data_dir_name: ".bugrail",
@@ -28,6 +28,34 @@ pub const PRODUCT_MANIFEST: ProductManifest = ProductManifest {
     release_download_base: "https://github.com/liquiid727/bugrail/releases/latest/download",
     updater_public_key: "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzQzc5Q0M1ODM1M0MyRUMKUldUc3dsT0R4WnpIOCtNSFUwRVlrSlJ4VGdvN3VTZWJteDB6L1RwWjZlU1FvRUpVNVFPUFZKNnkK",
 };
+
+/// Tauri dev launches the compatibility binary directly rather than through a
+/// macOS app bundle. AppKit therefore falls back to the executable name and a
+/// generic/cached icon unless we supply the product identity at runtime.
+#[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
+pub fn apply_macos_runtime_identity() -> Result<(), String> {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{NSData, NSProcessInfo, NSString};
+
+    let main_thread = MainThreadMarker::new()
+        .ok_or_else(|| "macOS product identity must be applied on the main thread".to_string())?;
+
+    let product_name = NSString::from_str(PRODUCT_MANIFEST.display_name);
+    NSProcessInfo::processInfo().setProcessName(&product_name);
+
+    let icon_data = NSData::with_bytes(include_bytes!("../../icons/icon.png"));
+    let icon = NSImage::initWithData(NSImage::alloc(), &icon_data)
+        .ok_or_else(|| "failed to decode the embedded Bugrail app icon".to_string())?;
+    let application = NSApplication::sharedApplication(main_thread);
+    // SAFETY: `icon` is a valid, retained NSImage and AppKit accepts it as the
+    // process-wide application icon. This runs on the main thread in setup.
+    unsafe {
+        application.setApplicationIconImage(Some(&icon));
+    }
+
+    Ok(())
+}
 
 pub fn platform_data_dir(base: &Path) -> PathBuf {
     base.join(PRODUCT_MANIFEST.platform_data_dir_name)
@@ -45,7 +73,7 @@ mod tests {
 
     #[test]
     fn bugrail_owns_external_product_identity() {
-        assert_eq!(PRODUCT_MANIFEST.display_name, "Code: Bugrail");
+        assert_eq!(PRODUCT_MANIFEST.display_name, "Bugrail");
         assert_eq!(PRODUCT_MANIFEST.bundle_identifier, "io.liquiid.bugrail");
         assert_eq!(PRODUCT_MANIFEST.data_dir_name, ".bugrail");
         assert_eq!(PRODUCT_MANIFEST.keyring_service_name, "bugrail");

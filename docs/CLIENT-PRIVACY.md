@@ -1,13 +1,16 @@
-# Privacy Policy
+# Privacy Notes
 
-Codeg Client is an iOS client for connecting to a user-provided Codeg server.
+Bugrail does not provide a hosted backend service. When run locally, project
+files, sessions, messages, and related application data are handled by the
+machine and server configured by the user.
 
-The app does not operate a hosted backend service and does not collect personal data directly from users. Server profiles are stored on the device, and access tokens are stored securely in the iOS Keychain.
+Data may be sent to third-party agent, model, source-control, chat, or other
+integration providers when the user enables and uses those integrations. The
+handling of that data is governed by the provider and configuration chosen by
+the user.
 
-When you connect the app to a Codeg server, project data, conversations, messages, files, terminal output, and related activity may be transmitted to and processed by the server you provide. The handling of that data depends on the server and services you configure.
+Server operators are responsible for protecting their deployment, access
+tokens, logs, databases, uploads, and network exposure.
 
-The app may connect to user-configured third-party services, such as code hosting providers, model providers, or other integrations, only as configured by the user.
-
-If you contact the developer for support, information you provide in that communication may be used to respond to your request.
-
-Contact: https://github.com/xintaofei/codeg/issues
+For project support, use the
+[Bugrail issue tracker](https://github.com/liquiid727/bugrail/issues).

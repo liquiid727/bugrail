@@ -1,10 +1,10 @@
 [package]
 name = "bugrail"
 version = "0.26.1"
-description = "Spec-driven AI coding workspace based on CodeG"
+description = "Spec-driven AI coding workspace for Bugrail"
 authors = ["liquiid727", "feitao"]
 edition = "2021"
-default-run = "codeg"
+default-run = "bugrail"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -29,6 +29,9 @@ tauri-runtime = [
     "dep:tauri-plugin-notification",
     "dep:tauri-plugin-single-instance",
     "dep:keyring",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
 ]
 # Exposes test scaffolding (`AppState::new_for_test`, `EventEmitter::test_web_only`,
 # `ConnectionManager::insert_test_connection`, parser `with_base_dir`, the
@@ -153,6 +156,9 @@ tauri-plugin-single-instance = { version = "2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"
+objc2 = { version = "0.6.3", optional = true }
+objc2-app-kit = { version = "0.3.2", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Threading"] }

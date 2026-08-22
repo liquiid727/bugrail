@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn card_without_an_explicit_title_uses_the_product_name() {
         let card = build_lark_card(&RichMessage::info("Ready"));
-        assert_eq!(card["header"]["title"]["content"], "Code: Bugrail");
+        assert_eq!(card["header"]["title"]["content"], "Bugrail");
     }
 
     /// The card body must render as `plain_text`, never `markdown` — an event

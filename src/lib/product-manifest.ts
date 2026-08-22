@@ -1,6 +1,9 @@
+import releaseManifest from "../../release/manifest.json"
+
 export interface ProductManifest {
   displayName: string
   bundleName: string
+  version: string
   description: string
   repositoryUrl: string
   releasesUrl: string
@@ -9,14 +12,14 @@ export interface ProductManifest {
 }
 
 export const PRODUCT_MANIFEST: Readonly<ProductManifest> = Object.freeze({
-  displayName: "Code: Bugrail",
-  bundleName: "Bugrail",
+  displayName: releaseManifest.product.name,
+  bundleName: releaseManifest.product.name,
+  version: releaseManifest.version,
   description: "Spec-driven AI coding workspace",
-  repositoryUrl: "https://github.com/liquiid727/bugrail",
-  releasesUrl: "https://github.com/liquiid727/bugrail/releases",
-  latestReleaseUrl: "https://github.com/liquiid727/bugrail/releases/latest",
-  updaterManifestUrl:
-    "https://github.com/liquiid727/bugrail/releases/latest/download/latest.json",
+  repositoryUrl: releaseManifest.release.repositoryUrl,
+  releasesUrl: releaseManifest.release.releasesUrl,
+  latestReleaseUrl: releaseManifest.release.latestReleaseUrl,
+  updaterManifestUrl: releaseManifest.release.updaterManifestUrl,
 })
 
 export function formatProductTitle(context?: string | null): string {

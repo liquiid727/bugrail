@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { detectEnvironment } from "@/lib/transport/detect"
 import { AppTitleBar } from "@/components/layout/app-title-bar"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { formatProductTitle } from "@/lib/product-manifest"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 
 interface SettingsNavItem {
@@ -155,7 +156,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
   const [navOpen, setNavOpen] = useState(false)
 
   useEffect(() => {
-    document.title = `${t("title")} - codeg`
+    document.title = formatProductTitle(t("title"))
   }, [t])
 
   const navigateTo = useCallback(

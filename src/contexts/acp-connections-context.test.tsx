@@ -1277,7 +1277,7 @@ describe("AcpConnectionsProvider permission request details", () => {
 
     const permission = h.store!.getConnection(TAB)!.pendingPermission
     expect(h.sendSystemNotification).toHaveBeenCalledWith(
-      "x - Code: Bugrail",
+      "x - Bugrail",
       expect.any(String)
     )
     expect(parsePermissionToolCall(permission?.tool_call).title).toBe("Bash")
@@ -1900,7 +1900,7 @@ describe("out-of-turn wire guard + background activity", () => {
 
     // 3. one OS notification per settled task, carrying its summary.
     expect(notify).toHaveBeenCalledTimes(1)
-    expect(notify.mock.calls[0][0]).toBe("x - Code: Bugrail")
+    expect(notify.mock.calls[0][0]).toBe("x - Bugrail")
     expect(notify.mock.calls[0][1]).toContain('Agent "Run pnpm build" finished')
 
     // 4. the settlement flips the launch card IN-MEMORY (no detail refetch):
