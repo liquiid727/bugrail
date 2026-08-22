@@ -9,6 +9,8 @@
 use async_trait::async_trait;
 use serde::Serialize;
 
+use crate::models::WorkTaskHandoffDraft;
+
 /// Ack for a task report: whether it was attributed and recorded, plus a
 /// human-readable note the agent reads when it was not (it just carries on).
 #[derive(Debug, Clone, Serialize)]
@@ -49,4 +51,17 @@ pub trait WorkTaskToolAccess: Send + Sync {
         verdict: &str,
         summary: Option<&str>,
     ) -> TaskReportAck;
+
+    /// Correlated final report with an optional structured handoff. The
+    /// default preserves compatibility for non-WorkTask implementations.
+    async fn complete_with_handoff(
+        &self,
+        parent_connection_id: &str,
+        verdict: &str,
+        summary: Option<&str>,
+        handoff: Option<WorkTaskHandoffDraft>,
+    ) -> TaskReportAck {
+        let _ = handoff;
+        self.complete(parent_connection_id, verdict, summary).await
+    }
 }

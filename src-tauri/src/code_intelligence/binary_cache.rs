@@ -24,7 +24,9 @@ use crate::code_intelligence::CodeIntelError;
 /// `<root>/bin/<version>/<platform>/` — layout segment per version and
 /// platform so installs never overwrite each other.
 pub fn bin_dir(root: &Path, platform: Platform) -> PathBuf {
-    root.join("bin").join(PINNED_VERSION).join(platform.dir_name())
+    root.join("bin")
+        .join(PINNED_VERSION)
+        .join(platform.dir_name())
 }
 
 /// Path the managed binary is expected at, if installed.
@@ -102,7 +104,11 @@ pub async fn ensure_installed(root: &Path) -> Result<PathBuf, CodeIntelError> {
     }
     let _ = std::fs::remove_dir_all(&staging);
     ensure_executable(&installed)?;
-    tracing::info!("[CodeIntel] installed {} at {}", PINNED_VERSION, installed.display());
+    tracing::info!(
+        "[CodeIntel] installed {} at {}",
+        PINNED_VERSION,
+        installed.display()
+    );
     Ok(installed)
 }
 
@@ -126,7 +132,10 @@ fn find_binary_in(dir: &Path) -> Result<PathBuf, CodeIntelError> {
 
 async fn download_archive(url: &str) -> Result<Vec<u8>, CodeIntelError> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("bugrail-code-intelligence/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!(
+            "bugrail-code-intelligence/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .map_err(|err| CodeIntelError::Download(err.to_string()))?;
     let response = client
@@ -188,7 +197,8 @@ fn extract_tar_gz(bytes: &[u8], dest: &Path, max: u64) -> Result<(), CodeIntelEr
         .map_err(|err| CodeIntelError::Extract(format!("read tar entries: {err}")))?;
     let mut extracted: u64 = 0;
     for entry in entries {
-        let mut entry = entry.map_err(|err| CodeIntelError::Extract(format!("tar entry: {err}")))?;
+        let mut entry =
+            entry.map_err(|err| CodeIntelError::Extract(format!("tar entry: {err}")))?;
         let rel = entry
             .path()
             .map_err(|err| CodeIntelError::Extract(format!("tar entry path: {err}")))?
@@ -232,8 +242,8 @@ fn extract_tar_gz(bytes: &[u8], dest: &Path, max: u64) -> Result<(), CodeIntelEr
 fn extract_zip(bytes: &[u8], dest: &Path, max: u64) -> Result<(), CodeIntelError> {
     use zip::ZipArchive;
 
-    let mut archive =
-        ZipArchive::new(Cursor::new(bytes)).map_err(|err| CodeIntelError::Extract(err.to_string()))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|err| CodeIntelError::Extract(err.to_string()))?;
     let mut extracted: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive
@@ -401,9 +411,7 @@ mod tests {
         let dir = bin_dir(root, Platform::DarwinArm64);
         assert_eq!(
             dir,
-            root.join("bin")
-                .join(PINNED_VERSION)
-                .join("darwin-arm64")
+            root.join("bin").join(PINNED_VERSION).join("darwin-arm64")
         );
         let bin = installed_binary_path(root, Platform::DarwinArm64);
         assert!(bin.starts_with(&dir));

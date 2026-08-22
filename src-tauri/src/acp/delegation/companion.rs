@@ -45,8 +45,8 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
 };
 use crate::acp::delegation::transport::{
-    client_ask_round_trip, client_cancel, client_cancel_task_round_trip, client_codebase_round_trip,
-    client_commit_feedback, client_create_automation_round_trip,
+    client_ask_round_trip, client_cancel, client_cancel_task_round_trip,
+    client_codebase_round_trip, client_commit_feedback, client_create_automation_round_trip,
     client_create_work_task_round_trip, client_feedback_round_trip, client_round_trip,
     client_session_round_trip, client_status_round_trip, client_task_complete_round_trip,
     client_task_progress_round_trip, BrokerAskRequest, BrokerCancelRequest,
@@ -702,10 +702,26 @@ async fn build_tools_call_spawn(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            let handoff = match arguments.get("handoff") {
+                None => None,
+                Some(value) => match serde_json::from_value::<crate::models::WorkTaskHandoffDraft>(
+                    value.clone(),
+                ) {
+                    Ok(handoff) => Some(handoff),
+                    Err(error) => {
+                        return LineAction::Respond(err(
+                            id,
+                            -32602,
+                            format!("task_complete handoff is invalid: {error}"),
+                        ));
+                    }
+                },
+            };
             let req = BrokerTaskCompleteRequest {
                 token: ctx.token.clone(),
                 verdict: verdict.to_string(),
                 summary,
+                handoff,
             };
             let round_trip =
                 Box::pin(async move { client_task_complete_round_trip(&socket, &req).await });
@@ -2558,7 +2574,12 @@ mod tests {
         for tool in CODEBASE_TOOL_NAMES {
             assert!(names.contains(&tool.to_string()), "{tool} missing");
         }
-        for forbidden in ["index_repository", "delete_project", "manage_adr", "ingest_traces"] {
+        for forbidden in [
+            "index_repository",
+            "delete_project",
+            "manage_adr",
+            "ingest_traces",
+        ] {
             assert!(!names.contains(&forbidden.to_string()));
         }
     }
@@ -2576,7 +2597,12 @@ mod tests {
             let resp = unwrap_respond(dispatch_for_test(&line).await);
             let e = resp.error.unwrap();
             assert_eq!(e.code, -32602);
-            assert!(e.message.contains("unknown tool"), "{}: {}", tool, e.message);
+            assert!(
+                e.message.contains("unknown tool"),
+                "{}: {}",
+                tool,
+                e.message
+            );
         }
     }
 

@@ -114,7 +114,13 @@ pub fn validate_memory_provider(provider: &ContextProviderConfig) -> Vec<String>
         }
     }
 
-    if provider.team_id.as_deref().unwrap_or_default().trim().is_empty() {
+    if provider
+        .team_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
         errors.push(format!(
             "memory provider '{id}' requires a project-specific teamId"
         ));
@@ -187,8 +193,8 @@ fn is_env_name(name: &str) -> bool {
 /// validation and runtime resolution so a hand-edited config cannot drift
 /// past the runtime path.
 pub fn validate_memory_endpoint(endpoint: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(endpoint)
-        .map_err(|e| format!("endpoint is not a valid URL: {}", e))?;
+    let url =
+        reqwest::Url::parse(endpoint).map_err(|e| format!("endpoint is not a valid URL: {}", e))?;
     if !url.username().is_empty() || url.password().is_some() {
         return Err("endpoint must not contain credentials".into());
     }
@@ -332,14 +338,14 @@ fn read_env_reference(
     env_name: Option<&str>,
     field: &str,
 ) -> Result<String, MemoryError> {
-    let name = env_name.filter(|name| !name.trim().is_empty()).ok_or_else(|| {
-        MemoryError {
+    let name = env_name
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| MemoryError {
             class: MemoryErrorClass::ConfigInvalid,
             message: format!("{field} is not configured"),
             provider_id: provider_id.to_string(),
             trace_id: None,
-        }
-    })?;
+        })?;
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -449,7 +455,9 @@ mod tests {
     #[test]
     fn resolution_maps_agents_exactly_then_defaults() {
         let mut provider = base_provider();
-        provider.agent_id_map.insert("claude".into(), "agent-claude".into());
+        provider
+            .agent_id_map
+            .insert("claude".into(), "agent-claude".into());
 
         let resolved = resolve_memory_provider_with_env(&provider, Some("claude"));
         assert_eq!(resolved.agent_id, "agent-claude");

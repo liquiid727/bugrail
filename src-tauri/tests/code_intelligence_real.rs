@@ -157,11 +157,7 @@ async fn real_adapter_full_lifecycle() {
 
     // Querying from a subdirectory still binds to the same index.
     let sub = rt
-        .query(
-            &repo.join("src"),
-            CodeQuery::Architecture,
-            json!({}),
-        )
+        .query(&repo.join("src"), CodeQuery::Architecture, json!({}))
         .await
         .expect("architecture from subdir");
     assert_eq!(sub.project, record.project);
@@ -234,8 +230,12 @@ async fn real_adapter_full_lifecycle() {
 
     // Both records are visible in the registry.
     let all = rt.registry().all();
-    assert!(all.iter().any(|r| r.project == record.project && !r.worktree));
-    assert!(all.iter().any(|r| r.project == wt_record.project && r.worktree));
+    assert!(all
+        .iter()
+        .any(|r| r.project == record.project && !r.worktree));
+    assert!(all
+        .iter()
+        .any(|r| r.project == wt_record.project && r.worktree));
 
     // ── task worktree cleanup drops the temporary index ───────────────────
     let dropped = rt.drop_task_worktree_indexes(42).await;
@@ -263,7 +263,11 @@ async fn real_adapter_full_lifecycle() {
 
     // The base repo index is untouched.
     let still = rt
-        .query(&repo, CodeQuery::TextSearch, json!({ "pattern": "hello index" }))
+        .query(
+            &repo,
+            CodeQuery::TextSearch,
+            json!({ "pattern": "hello index" }),
+        )
         .await
         .expect("base repo must stay queryable");
     assert_eq!(still.project, record.project);

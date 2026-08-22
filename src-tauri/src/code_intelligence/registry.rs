@@ -260,8 +260,14 @@ mod tests {
             "/repo/nested"
         );
         // Subdirectory resolves to the longest indexed ancestor.
-        assert_eq!(registry.resolve("/repo/nested/src/lib").unwrap().repo_path, "/repo/nested");
-        assert_eq!(registry.resolve("/repo/src/lib").unwrap().repo_path, "/repo");
+        assert_eq!(
+            registry.resolve("/repo/nested/src/lib").unwrap().repo_path,
+            "/repo/nested"
+        );
+        assert_eq!(
+            registry.resolve("/repo/src/lib").unwrap().repo_path,
+            "/repo"
+        );
         // Worktrees are SIBLINGS of their base repo (`{base}-task-{id}`),
         // never children — a worktree dir only matches its own record
         // (exact) or falls back to the nearest true ancestor.

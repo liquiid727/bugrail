@@ -67,10 +67,7 @@ mod tests {
         assert_ne!(session_id(&binding, 1, 2), session_id(&binding, 1, 3));
         assert_ne!(session_id(&binding, 1, 2), session_id(&binding, 2, 2));
 
-        assert_ne!(
-            upstream_task_id(&binding, 1),
-            upstream_task_id(&binding, 2)
-        );
+        assert_ne!(upstream_task_id(&binding, 1), upstream_task_id(&binding, 2));
 
         assert_eq!(
             message_id(&binding, 7, "turn-3"),

@@ -152,7 +152,10 @@ pub fn pick_override<'a>(
     if let Some(path) = env_override.map(str::trim).filter(|p| !p.is_empty()) {
         return Some((BinarySource::EnvOverride, path));
     }
-    if let Some(path) = preferences_override.map(str::trim).filter(|p| !p.is_empty()) {
+    if let Some(path) = preferences_override
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
         return Some((BinarySource::PreferencesOverride, path));
     }
     None
@@ -182,7 +185,9 @@ async fn probe_version(binary: &Path) -> Result<String, CodeIntelError> {
     }
     let output = tokio::time::timeout(
         Duration::from_secs(15),
-        tokio::process::Command::new(binary).arg("--version").output(),
+        tokio::process::Command::new(binary)
+            .arg("--version")
+            .output(),
     )
     .await
     .map_err(|_| {
@@ -262,7 +267,13 @@ pub fn enforce_caps(query: CodeQuery, mut args: Value) -> Value {
     if !args.is_object() {
         args = json!({});
     }
-    fn clamp_int(args: &mut Value, key: &str, min: i64, max: i64, default_when_absent: Option<i64>) {
+    fn clamp_int(
+        args: &mut Value,
+        key: &str,
+        min: i64,
+        max: i64,
+        default_when_absent: Option<i64>,
+    ) {
         let obj = args.as_object_mut().unwrap();
         match obj.get(key).and_then(Value::as_i64) {
             Some(v) => {
@@ -338,9 +349,8 @@ pub fn derive_project_key(canonical_path: &str) -> String {
 /// Canonicalize a directory path to the string form used as registry key
 /// and `CBM_ALLOWED_ROOT`.
 pub fn canonicalize_dir(path: &Path) -> Result<String, CodeIntelError> {
-    let canonical = std::fs::canonicalize(path).map_err(|err| {
-        CodeIntelError::NotFound(format!("{}: {err}", path.display()))
-    })?;
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|err| CodeIntelError::NotFound(format!("{}: {err}", path.display())))?;
     if !canonical.is_dir() {
         return Err(CodeIntelError::NotFound(format!(
             "{} is not a directory",
@@ -551,7 +561,10 @@ impl CodeIntelRuntime {
     /// Apply a new preferences-file override (or clear it with `None`).
     /// Drops the cached resolution and all live sessions so the next call
     /// re-resolves.
-    pub async fn set_binary_override(&self, path: Option<String>) -> Result<InstallState, CodeIntelError> {
+    pub async fn set_binary_override(
+        &self,
+        path: Option<String>,
+    ) -> Result<InstallState, CodeIntelError> {
         let mut prefs = crate::preferences::load();
         prefs.codebase_memory_mcp_path = path.filter(|p| !p.trim().is_empty());
         crate::preferences::save(&prefs).map_err(CodeIntelError::io)?;
@@ -568,12 +581,16 @@ impl CodeIntelRuntime {
         }
     }
 
-    async fn session_for(&self, canonical_path: &str) -> Result<std::sync::Arc<adapter::AdapterSession>, CodeIntelError> {
+    async fn session_for(
+        &self,
+        canonical_path: &str,
+    ) -> Result<std::sync::Arc<adapter::AdapterSession>, CodeIntelError> {
         // Read paths never trigger a download: a missing binary is reported,
         // and only the lifecycle commands (install/enable/sync) fetch it.
         let Some(resolved) = self.resolve_binary().await? else {
             return Err(CodeIntelError::NotFound(
-                "codebase-memory-mcp binary is not installed — install it from the Context page".into(),
+                "codebase-memory-mcp binary is not installed — install it from the Context page"
+                    .into(),
             ));
         };
         let mut guard = self.session_manager.lock().await;
@@ -667,7 +684,11 @@ impl CodeIntelRuntime {
         self.allow_root(&canonical).await?;
         let session = self.session_for(&canonical).await?;
         let outcome = session
-            .call_tool("index_repository", json!({ "repo_path": canonical }), INDEX_TIMEOUT)
+            .call_tool(
+                "index_repository",
+                json!({ "repo_path": canonical }),
+                INDEX_TIMEOUT,
+            )
             .await?;
         if outcome.is_error {
             return Err(CodeIntelError::Adapter(truncate_text(outcome.text, 2048)));
@@ -689,15 +710,18 @@ impl CodeIntelRuntime {
 
     /// Re-sync an already-enabled repository. `force` requests a full
     /// re-index; otherwise the upstream default (incremental) is used.
-    pub async fn sync(&self, repo_path: &Path, force: bool) -> Result<ProjectRecord, CodeIntelError> {
+    pub async fn sync(
+        &self,
+        repo_path: &Path,
+        force: bool,
+    ) -> Result<ProjectRecord, CodeIntelError> {
         let canonical = canonicalize_dir(repo_path)?;
-        let mut record = self
-            .registry
-            .get(&canonical)
-            .ok_or_else(|| CodeIntelError::NotFound("repository is not enabled — enable it first".into()))?;
+        let mut record = self.registry.get(&canonical).ok_or_else(|| {
+            CodeIntelError::NotFound("repository is not enabled — enable it first".into())
+        })?;
         self.ensure_binary().await?; // lifecycle commands may download
-        // Idempotent re-record: covers a store whose allowed_roots file was
-        // wiped after the repository was enabled.
+                                     // Idempotent re-record: covers a store whose allowed_roots file was
+                                     // wiped after the repository was enabled.
         self.allow_root(&canonical).await?;
         let session = self.session_for(&canonical).await?;
         let mut args = json!({ "repo_path": canonical });
@@ -711,7 +735,9 @@ impl CodeIntelRuntime {
             return Err(CodeIntelError::Adapter(truncate_text(outcome.text, 2048)));
         }
         record.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
-        if let Some(rev) = extract_first_str(&outcome.text, &["revision", "indexed_revision", "commit"]) {
+        if let Some(rev) =
+            extract_first_str(&outcome.text, &["revision", "indexed_revision", "commit"])
+        {
             record.revision = Some(rev);
         }
         self.registry.upsert(record.clone())?;
@@ -719,9 +745,15 @@ impl CodeIntelRuntime {
     }
 
     /// Toggle a record without touching index data.
-    pub fn set_enabled(&self, repo_path: &str, enabled: bool) -> Result<ProjectRecord, CodeIntelError> {
+    pub fn set_enabled(
+        &self,
+        repo_path: &str,
+        enabled: bool,
+    ) -> Result<ProjectRecord, CodeIntelError> {
         if !self.registry.set_enabled(repo_path, enabled)? {
-            return Err(CodeIntelError::NotFound("no index registered for this path".into()));
+            return Err(CodeIntelError::NotFound(
+                "no index registered for this path".into(),
+            ));
         }
         Ok(self
             .registry
@@ -737,7 +769,11 @@ impl CodeIntelRuntime {
         match self.session_for(&record.repo_path).await {
             Ok(session) => {
                 let result = session
-                    .call_tool("delete_project", json!({ "project": record.project }), QUERY_TIMEOUT)
+                    .call_tool(
+                        "delete_project",
+                        json!({ "project": record.project }),
+                        QUERY_TIMEOUT,
+                    )
                     .await;
                 if let Err(err) = result {
                     tracing::warn!(
@@ -747,7 +783,10 @@ impl CodeIntelRuntime {
                 }
             }
             Err(err) => {
-                tracing::warn!("[CodeIntel] could not start session to delete {}: {err}", record.project);
+                tracing::warn!(
+                    "[CodeIntel] could not start session to delete {}: {err}",
+                    record.project
+                );
             }
         }
         if let Some(manager) = self.session_manager.lock().await.as_ref() {
@@ -781,10 +820,9 @@ impl CodeIntelRuntime {
         arguments: Value,
     ) -> Result<QueryOutcome, CodeIntelError> {
         let canonical = canonicalize_dir(working_dir)?;
-        let record = self
-            .registry
-            .resolve(&canonical)
-            .ok_or_else(|| CodeIntelError::NotFound("no enabled code index covers this directory".into()))?;
+        let record = self.registry.resolve(&canonical).ok_or_else(|| {
+            CodeIntelError::NotFound("no enabled code index covers this directory".into())
+        })?;
         let session = self.session_for(&record.repo_path).await?;
         let mut args = enforce_caps(query, arguments);
         if let Some(obj) = args.as_object_mut() {
@@ -827,21 +865,32 @@ impl CodeIntelRuntime {
             return Ok(status);
         };
         let Ok(outcome) = session
-            .call_tool("index_status", json!({ "project": record.project }), QUERY_TIMEOUT)
+            .call_tool(
+                "index_status",
+                json!({ "project": record.project }),
+                QUERY_TIMEOUT,
+            )
             .await
         else {
             return Ok(status);
         };
         if let Some(json) = parse_json_lenient(&outcome.text) {
-            status.phase = extract_first_str_from(&json, &["phase", "status", "state", "index_status"])
-                .unwrap_or_else(|| status.phase.clone());
-            if let Some(rev) = extract_first_str_from(&json, &["revision", "indexed_revision", "commit"]) {
+            status.phase =
+                extract_first_str_from(&json, &["phase", "status", "state", "index_status"])
+                    .unwrap_or_else(|| status.phase.clone());
+            if let Some(rev) =
+                extract_first_str_from(&json, &["revision", "indexed_revision", "commit"])
+            {
                 status.revision = Some(rev);
             }
-            status.node_count = extract_first_u64_from(&json, &["nodes", "node_count", "total_nodes"]);
-            status.edge_count = extract_first_u64_from(&json, &["edges", "edge_count", "total_edges"]);
-            status.file_count =
-                extract_first_u64_from(&json, &["files", "file_count", "indexed_files", "total_files"]);
+            status.node_count =
+                extract_first_u64_from(&json, &["nodes", "node_count", "total_nodes"]);
+            status.edge_count =
+                extract_first_u64_from(&json, &["edges", "edge_count", "total_edges"]);
+            status.file_count = extract_first_u64_from(
+                &json,
+                &["files", "file_count", "indexed_files", "total_files"],
+            );
         }
         Ok(status)
     }
@@ -849,7 +898,10 @@ impl CodeIntelRuntime {
     /// Normalized, bounded summary for Context Packs (non-MCP agents).
     /// `None` when no index covers the directory — degraded, never
     /// blocking.
-    pub async fn context_summary(&self, working_dir: &Path) -> Result<Option<Value>, CodeIntelError> {
+    pub async fn context_summary(
+        &self,
+        working_dir: &Path,
+    ) -> Result<Option<Value>, CodeIntelError> {
         let canonical = canonicalize_dir(working_dir)?;
         let Some(record) = self.registry.resolve(&canonical) else {
             return Ok(None);
@@ -859,7 +911,11 @@ impl CodeIntelRuntime {
         };
 
         let architecture = session
-            .call_tool("get_architecture", json!({ "project": record.project }), QUERY_TIMEOUT)
+            .call_tool(
+                "get_architecture",
+                json!({ "project": record.project }),
+                QUERY_TIMEOUT,
+            )
             .await
             .map(|o| truncate_text(o.text, MAX_SUMMARY_ARCH_BYTES))
             .unwrap_or_default();
@@ -868,17 +924,26 @@ impl CodeIntelRuntime {
         let mut phase = String::from("unknown");
         let mut files: Option<u64> = None;
         if let Ok(status_outcome) = session
-            .call_tool("index_status", json!({ "project": record.project }), QUERY_TIMEOUT)
+            .call_tool(
+                "index_status",
+                json!({ "project": record.project }),
+                QUERY_TIMEOUT,
+            )
             .await
         {
             if let Some(json) = parse_json_lenient(&status_outcome.text) {
-                if let Some(rev) = extract_first_str_from(&json, &["revision", "indexed_revision", "commit"]) {
+                if let Some(rev) =
+                    extract_first_str_from(&json, &["revision", "indexed_revision", "commit"])
+                {
                     revision = Some(rev);
                 }
                 if let Some(p) = extract_first_str_from(&json, &["phase", "status", "state"]) {
                     phase = p;
                 }
-                files = extract_first_u64_from(&json, &["files", "file_count", "indexed_files", "total_files"]);
+                files = extract_first_u64_from(
+                    &json,
+                    &["files", "file_count", "indexed_files", "total_files"],
+                );
             }
         }
 
@@ -1030,30 +1095,48 @@ mod tests {
             pick_override(None, Some("/prefs/bin")),
             Some((BinarySource::PreferencesOverride, "/prefs/bin"))
         );
-        assert_eq!(pick_override(Some("  "), Some("/prefs/bin")).unwrap().0, BinarySource::PreferencesOverride);
+        assert_eq!(
+            pick_override(Some("  "), Some("/prefs/bin")).unwrap().0,
+            BinarySource::PreferencesOverride
+        );
         assert_eq!(pick_override(None, None), None);
         assert_eq!(pick_override(Some(""), Some("")), None);
     }
 
     #[test]
     fn caps_clamp_agent_arguments() {
-        let args = enforce_caps(CodeQuery::Search, json!({ "limit": 9999, "offset": 4, "pattern": "x" }));
+        let args = enforce_caps(
+            CodeQuery::Search,
+            json!({ "limit": 9999, "offset": 4, "pattern": "x" }),
+        );
         assert_eq!(args["limit"], 50); // 9999 clamps to the cap
         let args = enforce_caps(CodeQuery::Search, json!({}));
         assert_eq!(args["limit"], 20); // bounded default when absent
 
-        let args = enforce_caps(CodeQuery::Trace, json!({ "depth": 99, "function_name": "f" }));
+        let args = enforce_caps(
+            CodeQuery::Trace,
+            json!({ "depth": 99, "function_name": "f" }),
+        );
         assert_eq!(args["depth"], 5);
 
-        let args = enforce_caps(CodeQuery::Query, json!({ "max_rows": 10_000, "query": "MATCH (n) RETURN n" }));
+        let args = enforce_caps(
+            CodeQuery::Query,
+            json!({ "max_rows": 10_000, "query": "MATCH (n) RETURN n" }),
+        );
         assert_eq!(args["max_rows"], 200);
 
-        let args = enforce_caps(CodeQuery::TextSearch, json!({ "pattern": "x", "limit": 10_000 }));
+        let args = enforce_caps(
+            CodeQuery::TextSearch,
+            json!({ "pattern": "x", "limit": 10_000 }),
+        );
         assert_eq!(args["limit"], 100);
 
         let paths: Vec<Value> = (0..200).map(|i| json!(format!("f{i}.rs"))).collect();
         let scopes: Vec<Value> = (0..50).map(|i| json!(format!("s{i}"))).collect();
-        let args = enforce_caps(CodeQuery::Coverage, json!({ "paths": paths, "scopes": scopes }));
+        let args = enforce_caps(
+            CodeQuery::Coverage,
+            json!({ "paths": paths, "scopes": scopes }),
+        );
         assert_eq!(args["paths"].as_array().unwrap().len(), 128);
         assert_eq!(args["scopes"].as_array().unwrap().len(), 32);
 
@@ -1113,7 +1196,10 @@ mod tests {
         );
         assert_eq!(extract_first_str("not json", &["phase"]), None);
         let json = parse_json_lenient(r#"{"files": 42}"#).unwrap();
-        assert_eq!(extract_first_u64_from(&json, &["files", "file_count"]), Some(42));
+        assert_eq!(
+            extract_first_u64_from(&json, &["files", "file_count"]),
+            Some(42)
+        );
     }
 
     #[test]

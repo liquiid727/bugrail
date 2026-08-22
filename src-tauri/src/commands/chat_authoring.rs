@@ -348,6 +348,7 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             folder_id: folder.id,
             title: spec.title.clone(),
             config,
+            task_kind: Default::default(),
         };
         match crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
             .await

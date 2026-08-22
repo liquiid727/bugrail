@@ -402,9 +402,15 @@ fn parse_hits(
     layer: MemoryLayer,
     provider: &ResolvedMemoryProvider,
 ) -> Result<Vec<MemoryRecallHit>, MemoryError> {
-    // L1: `data.hits` array. L3: either a `hits` array or a single
-    // `content` document — normalized to the same vendor-neutral hit.
-    if let Some(hits) = data.get("hits").and_then(|hits| hits.as_array()) {
+    // L1: the pinned v3 contract returns `data.items` (sdk-v3.yaml
+    // AtomicSearchData / AtomicQueryData); `hits` is accepted as a legacy
+    // alias. L3: either an items/hits array or a single `content`
+    // document — normalized to the same vendor-neutral hit.
+    let hits = data
+        .get("items")
+        .or_else(|| data.get("hits"))
+        .and_then(|hits| hits.as_array());
+    if let Some(hits) = hits {
         let mut out = Vec::new();
         for hit in hits {
             let content = hit

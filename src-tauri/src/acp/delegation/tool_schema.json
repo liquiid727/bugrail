@@ -289,6 +289,17 @@
         "summary": {
           "type": "string",
           "description": "Short result summary shown on the task card: what changed, and anything the reviewer should look at."
+        },
+        "handoff": {
+          "type": "object",
+          "description": "Optional bounded structured handoff for the next WorkTask. It is accepted only from the correlated live task session.",
+          "properties": {
+            "summary": { "type": "string" },
+            "artifacts": { "type": "array", "items": { "type": "string" } },
+            "risks": { "type": "array", "items": { "type": "string" } },
+            "openQuestions": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["summary"]
         }
       }
     }

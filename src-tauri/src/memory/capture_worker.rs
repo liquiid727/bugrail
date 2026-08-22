@@ -262,11 +262,10 @@ async fn attempt_delivery(
                 })
                 .unwrap_or(MemoryErrorClass::Unavailable)
         };
-        return Err(MemoryError::new(
-            class,
-            "provider health gate did not pass before capture",
-        )
-        .with_provider_id(row.provider_id.clone()));
+        return Err(
+            MemoryError::new(class, "provider health gate did not pass before capture")
+                .with_provider_id(row.provider_id.clone()),
+        );
     }
 
     let (resolved, adapter) = memory.adapter_for(&provider_config, None)?;

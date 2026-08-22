@@ -20,10 +20,26 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(WorkTaskContract::SourceSpecId).string().not_null())
-                    .col(ColumnDef::new(WorkTaskContract::SourceSpecVersion).string().not_null())
-                    .col(ColumnDef::new(WorkTaskContract::SourceSpecPath).string().not_null())
-                    .col(ColumnDef::new(WorkTaskContract::SourceSpecHash).string().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskContract::SourceSpecId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContract::SourceSpecVersion)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContract::SourceSpecPath)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskContract::SourceSpecHash)
+                            .string()
+                            .not_null(),
+                    )
                     // JSON snapshot of selected acceptance criteria (id + text).
                     .col(
                         ColumnDef::new(WorkTaskContract::AcceptanceCriteria)
@@ -31,7 +47,11 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     // JSON snapshot of the required gate policy.
-                    .col(ColumnDef::new(WorkTaskContract::GatePolicy).text().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskContract::GatePolicy)
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(WorkTaskContract::CreatedAt)
                             .timestamp_with_time_zone()
@@ -79,14 +99,38 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(WorkTaskGateResult::TaskId).integer().not_null())
-                    .col(ColumnDef::new(WorkTaskGateResult::RunSeq).integer().not_null())
-                    .col(ColumnDef::new(WorkTaskGateResult::GateId).string().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::TaskId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::RunSeq)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::GateId)
+                            .string()
+                            .not_null(),
+                    )
                     // preflight | human_approval
-                    .col(ColumnDef::new(WorkTaskGateResult::GateType).string().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::GateType)
+                            .string()
+                            .not_null(),
+                    )
                     // running | passed | failed | blocked | waived
-                    .col(ColumnDef::new(WorkTaskGateResult::Status).string().not_null())
-                    .col(ColumnDef::new(WorkTaskGateResult::Required).boolean().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::Required)
+                            .boolean()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(WorkTaskGateResult::Reusable)
                             .boolean()
@@ -94,7 +138,11 @@ impl MigrationTrait for Migration {
                             .default(false),
                     )
                     // engine | user (derived from the command context; never request JSON).
-                    .col(ColumnDef::new(WorkTaskGateResult::Actor).string().not_null())
+                    .col(
+                        ColumnDef::new(WorkTaskGateResult::Actor)
+                            .string()
+                            .not_null(),
+                    )
                     // JSON references and capped summaries (never secrets/full output).
                     .col(ColumnDef::new(WorkTaskGateResult::Evidence).text().null())
                     // Required for failed / blocked / waived.

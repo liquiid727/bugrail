@@ -64,7 +64,11 @@ pub struct AdapterSession {
 
 impl AdapterSession {
     /// Spawn the adapter binary and complete the MCP initialize handshake.
-    pub async fn spawn(binary: &Path, store_dir: &Path, canonical_path: &str) -> Result<Arc<Self>, CodeIntelError> {
+    pub async fn spawn(
+        binary: &Path,
+        store_dir: &Path,
+        canonical_path: &str,
+    ) -> Result<Arc<Self>, CodeIntelError> {
         let mut child = tokio::process::Command::new(binary)
             .env(ENV_CACHE_DIR, store_dir)
             .env(ENV_ALLOWED_ROOT, canonical_path)
@@ -76,9 +80,18 @@ impl AdapterSession {
             .spawn()
             .map_err(|err| CodeIntelError::Spawn(format!("{}: {err}", binary.display())))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| CodeIntelError::Spawn("stdin unavailable".into()))?;
-        let stdout = child.stdout.take().ok_or_else(|| CodeIntelError::Spawn("stdout unavailable".into()))?;
-        let stderr = child.stderr.take().ok_or_else(|| CodeIntelError::Spawn("stderr unavailable".into()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CodeIntelError::Spawn("stdin unavailable".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| CodeIntelError::Spawn("stdout unavailable".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| CodeIntelError::Spawn("stderr unavailable".into()))?;
 
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let reader_pending = pending.clone();
@@ -141,7 +154,9 @@ impl AdapterSession {
                 init
             )));
         }
-        session.notify("notifications/initialized", json!({})).await?;
+        session
+            .notify("notifications/initialized", json!({}))
+            .await?;
         Ok(session)
     }
 
@@ -172,7 +187,10 @@ impl AdapterSession {
             .get("result")
             .cloned()
             .ok_or_else(|| CodeIntelError::Adapter("tool response missing result".into()))?;
-        let is_error = result.get("isError").and_then(Value::as_bool).unwrap_or(false);
+        let is_error = result
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut text = String::new();
         if let Some(blocks) = result.get("content").and_then(Value::as_array) {
             for block in blocks {
@@ -189,7 +207,12 @@ impl AdapterSession {
         Ok(ToolCallOutcome { text, is_error })
     }
 
-    async fn request(self: &Arc<Self>, method: &str, params: Value, timeout: Duration) -> Result<Value, CodeIntelError> {
+    async fn request(
+        self: &Arc<Self>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, CodeIntelError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -290,12 +313,16 @@ impl SessionManager {
 
     /// The session bound to `canonical_path`, spawning it on first use. A
     /// previously cached session whose child exited is replaced.
-    pub async fn session_for(&self, canonical_path: &str) -> Result<Arc<AdapterSession>, CodeIntelError> {
+    pub async fn session_for(
+        &self,
+        canonical_path: &str,
+    ) -> Result<Arc<AdapterSession>, CodeIntelError> {
         let mut sessions = self.sessions.lock().await;
         match sessions.get(canonical_path) {
             Some(existing) if child_alive(existing).await => Ok(existing.clone()),
             _ => {
-                let session = AdapterSession::spawn(&self.binary, &self.store_dir, canonical_path).await?;
+                let session =
+                    AdapterSession::spawn(&self.binary, &self.store_dir, canonical_path).await?;
                 sessions.insert(canonical_path.to_string(), session.clone());
                 Ok(session)
             }
@@ -437,7 +464,10 @@ while True:
             )
             .await
             .ok()?;
-        session.notify("notifications/initialized", json!({})).await.ok()?;
+        session
+            .notify("notifications/initialized", json!({}))
+            .await
+            .ok()?;
         Some(session)
     }
 

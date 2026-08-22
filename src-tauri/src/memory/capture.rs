@@ -181,8 +181,7 @@ pub fn stage_capture(
     };
     // Deterministic field order via the derived Serialize impl — the hash is
     // an integrity check over exactly this staged string.
-    let payload_json =
-        serde_json::to_string(&payload).expect("staged capture payload serializes");
+    let payload_json = serde_json::to_string(&payload).expect("staged capture payload serializes");
     let payload_hash = format!("{:x}", Sha256::digest(payload_json.as_bytes()));
     Some(StagedCapture {
         included: source_message_ids.len(),
@@ -266,8 +265,8 @@ pub async fn enqueue_for_run(db: &AppDatabase, task_id: i32, run_seq: i32) -> Re
         return Ok(0);
     };
 
-    let config = crate::specos_control::load_context(Path::new(&folder.path))
-        .map_err(|e| e.to_string())?;
+    let config =
+        crate::specos_control::load_context(Path::new(&folder.path)).map_err(|e| e.to_string())?;
     let providers = capture_providers(&config);
     if providers.is_empty() {
         // Legacy projects: zero Memory behavior, zero rows (spec §9, AC08).
@@ -290,21 +289,18 @@ pub async fn enqueue_for_run(db: &AppDatabase, task_id: i32, run_seq: i32) -> Re
         return Ok(0);
     }
 
-    let (detail, _) = crate::commands::conversations::get_folder_conversation_core(
-        &db.conn,
-        conversation_id,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let (detail, _) =
+        crate::commands::conversations::get_folder_conversation_core(&db.conn, conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
     let binding = binding_for_folder(Path::new(&folder.path));
     let mut staged_total = 0u32;
     for provider in missing {
-        let Some(staged) = stage_capture(&detail.turns, &binding, conversation_id, provider)
-        else {
+        let Some(staged) = stage_capture(&detail.turns, &binding, conversation_id, provider) else {
             continue;
         };
-        let ids_json = serde_json::to_string(&staged.source_message_ids)
-            .unwrap_or_else(|_| "[]".to_string());
+        let ids_json =
+            serde_json::to_string(&staged.source_message_ids).unwrap_or_else(|_| "[]".to_string());
         memory_capture_service::enqueue(
             &db.conn,
             memory_capture_service::NewDelivery {
@@ -387,7 +383,10 @@ pub async fn reconcile_missing_deliveries(db: &AppDatabase) -> Result<u32, Strin
         }
     }
     if staged > 0 {
-        tracing::info!(staged, "[memory] capture reconciliation staged missing deliveries");
+        tracing::info!(
+            staged,
+            "[memory] capture reconciliation staged missing deliveries"
+        );
     }
     Ok(staged)
 }
@@ -402,9 +401,7 @@ mod tests {
         MessageTurn {
             id: id.into(),
             role,
-            blocks: vec![ContentBlock::Text {
-                text: text.into(),
-            }],
+            blocks: vec![ContentBlock::Text { text: text.into() }],
             timestamp: Utc::now(),
             usage: None,
             duration_ms: None,
@@ -443,7 +440,11 @@ mod tests {
     #[test]
     fn secret_rule_excludes_the_whole_message_before_hashing() {
         let turns = vec![
-            turn("t1", TurnRole::User, "use this key: sk-liveabc123abc123abc123abc"),
+            turn(
+                "t1",
+                TurnRole::User,
+                "use this key: sk-liveabc123abc123abc123abc",
+            ),
             turn("t2", TurnRole::Assistant, "done"),
         ];
         let staged = stage_capture(&turns, "binding", 7, &provider(8192, 262144)).unwrap();
@@ -481,13 +482,8 @@ mod tests {
             turn("t1", TurnRole::User, &half),
             turn("t2", TurnRole::Assistant, &half),
         ];
-        let staged = stage_capture(
-            &turns,
-            "binding",
-            7,
-            &provider(256 * 1024, 256 * 1024),
-        )
-        .unwrap();
+        let staged =
+            stage_capture(&turns, "binding", 7, &provider(256 * 1024, 256 * 1024)).unwrap();
         assert_eq!(staged.included, 1);
         assert_eq!(staged.excluded_batch_over_cap, 1);
     }
@@ -496,7 +492,11 @@ mod tests {
     fn count_cap_limits_messages_to_one_hundred() {
         let mut turns = Vec::new();
         for i in 0..120 {
-            let role = if i % 2 == 0 { TurnRole::User } else { TurnRole::Assistant };
+            let role = if i % 2 == 0 {
+                TurnRole::User
+            } else {
+                TurnRole::Assistant
+            };
             turns.push(turn(&format!("t{i}"), role, &format!("message {i}")));
         }
         // Final turn must be assistant with text: t119 is assistant. OK.
@@ -522,11 +522,17 @@ mod tests {
     fn secret_patterns_cover_the_documented_shapes() {
         assert!(contains_secret("-----BEGIN RSA PRIVATE KEY-----"));
         assert!(contains_secret("key AKIAIOSFODNN7EXAMPLE here"));
-        assert!(contains_secret("token ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+        assert!(contains_secret(
+            "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+        ));
         assert!(contains_secret("xoxb-1234567890-abcdef"));
         assert!(contains_secret("sk-proj-abcdefghijklmnopqrstuvwx"));
-        assert!(contains_secret("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVP"));
-        assert!(contains_secret("Authorization: Bearer abcdef1234567890abcd"));
+        assert!(contains_secret(
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVP"
+        ));
+        assert!(contains_secret(
+            "Authorization: Bearer abcdef1234567890abcd"
+        ));
         assert!(contains_secret("password = hunter2secret"));
         assert!(contains_secret("https://user:pass@example.com/api"));
         assert!(!contains_secret("the password field is validated"));

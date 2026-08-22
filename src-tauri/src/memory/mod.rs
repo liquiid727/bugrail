@@ -321,7 +321,10 @@ impl AdapterRegistry {
             .ok_or_else(|| {
                 MemoryError::new(
                     MemoryErrorClass::ConfigInvalid,
-                    format!("adapter '{}' is not in the static allowlist", provider.adapter),
+                    format!(
+                        "adapter '{}' is not in the static allowlist",
+                        provider.adapter
+                    ),
                 )
                 .with_provider_id(provider.provider_id.clone())
             })?;
@@ -468,7 +471,10 @@ mod tests {
 
     #[test]
     fn error_keys_and_retryability_are_stable() {
-        assert_eq!(MemoryErrorClass::ConfigInvalid.key(), "memory.configInvalid");
+        assert_eq!(
+            MemoryErrorClass::ConfigInvalid.key(),
+            "memory.configInvalid"
+        );
         assert_eq!(
             MemoryErrorClass::IdentityMissing.key(),
             "memory.identityMissing"

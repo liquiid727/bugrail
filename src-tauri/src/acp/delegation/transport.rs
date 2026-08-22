@@ -203,6 +203,8 @@ pub struct BrokerTaskCompleteRequest {
     pub verdict: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<crate::models::WorkTaskHandoffDraft>,
 }
 
 /// Create an automation (scheduled or manual) from the chat the caller is in.

@@ -43,12 +43,8 @@ pub trait CodebaseToolAccess: Send + Sync {
     /// a Bugrail tool name (`codebase_search`, …); `arguments` is the raw
     /// MCP argument object — the impl clamps limits and injects the bound
     /// `project` key itself.
-    async fn query(
-        &self,
-        working_dir: &Path,
-        tool: &str,
-        arguments: Value,
-    ) -> CodebaseQueryOutcome;
+    async fn query(&self, working_dir: &Path, tool: &str, arguments: Value)
+        -> CodebaseQueryOutcome;
 }
 
 /// Stub for processes/tests without Code Intelligence: every query degrades
@@ -57,7 +53,12 @@ pub struct NullCodebaseTools;
 
 #[async_trait]
 impl CodebaseToolAccess for NullCodebaseTools {
-    async fn query(&self, _working_dir: &Path, _tool: &str, _arguments: Value) -> CodebaseQueryOutcome {
+    async fn query(
+        &self,
+        _working_dir: &Path,
+        _tool: &str,
+        _arguments: Value,
+    ) -> CodebaseQueryOutcome {
         CodebaseQueryOutcome::error(
             "Code Intelligence is not available in this process. Ask the user to enable it on \
              the Context page.",
@@ -73,7 +74,12 @@ pub struct RuntimeCodebaseTools;
 
 #[async_trait]
 impl CodebaseToolAccess for RuntimeCodebaseTools {
-    async fn query(&self, working_dir: &Path, tool: &str, arguments: Value) -> CodebaseQueryOutcome {
+    async fn query(
+        &self,
+        working_dir: &Path,
+        tool: &str,
+        arguments: Value,
+    ) -> CodebaseQueryOutcome {
         let Some(runtime) = crate::code_intelligence::runtime() else {
             return CodebaseQueryOutcome::error(
                 "Code Intelligence is not initialized in this process.",

@@ -137,7 +137,11 @@ impl MemoryProvider for DeterministicMemoryAdapter {
             state.captured.push(batch.clone());
         }
         Ok(MemoryCaptureReceipt {
-            accepted_ids: batch.messages.iter().map(|message| message.id.clone()).collect(),
+            accepted_ids: batch
+                .messages
+                .iter()
+                .map(|message| message.id.clone())
+                .collect(),
             trace_id: Some("test-trace".into()),
         })
     }
