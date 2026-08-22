@@ -223,6 +223,7 @@ pub async fn team_run_start_core(
                 integration_snapshot: None,
             })
             .map_err(|e| DbError::Validation(e.to_string()))?,
+            task_kind: Default::default(),
         };
         let task = work_task_service::create_in_transaction(&txn, draft).await?;
         specos_runtime_service::bind_team_task(&txn, &run_id, &node.id, task.id).await?;

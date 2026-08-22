@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use crate::db::entities::work_task::WorkTaskStatus;
+pub use crate::db::entities::work_task::{WorkTaskKind, WorkTaskStatus};
 
 /// One folder-bound work task. Wire form mirrors `src/lib/types.ts`
 /// (`WorkTask`).
@@ -10,6 +10,7 @@ pub struct WorkTaskInfo {
     pub id: i32,
     pub folder_id: i32,
     pub title: String,
+    pub task_kind: WorkTaskKind,
     /// Opaque `WorkTaskConfig` snapshot (prompt blocks + per-task overrides);
     /// replayed at launch, never queried.
     pub config: serde_json::Value,
@@ -91,6 +92,8 @@ pub struct WorkTaskDraft {
     pub folder_id: i32,
     pub title: String,
     pub config: serde_json::Value,
+    #[serde(default)]
+    pub task_kind: WorkTaskKind,
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and
@@ -598,7 +601,10 @@ mod tests {
             "reason": "forged"
         }"#;
         let draft: WorkTaskContractDraft = serde_json::from_str(raw).expect("decode");
-        assert_eq!(draft.source_spec_path, ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md");
+        assert_eq!(
+            draft.source_spec_path,
+            ".features/BUGRAIL-SPECOS-001-work-task-quality/spec.md"
+        );
         assert_eq!(draft.gate_policy.gates.len(), 1);
         assert_eq!(
             draft.gate_policy.gates[0].gate_type,

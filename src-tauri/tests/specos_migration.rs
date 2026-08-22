@@ -8,8 +8,8 @@ use codeg_lib::db::migration::Migrator;
 use codeg_lib::db::service::work_task_service;
 use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_folder};
 use sea_orm::{
-    ActiveValue, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait,
-    QueryFilter, Statement,
+    ActiveValue, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait, QueryFilter,
+    Statement,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -33,7 +33,8 @@ async fn index_names(conn: &codeg_lib::db::AppDatabase) -> Vec<String> {
         .query_all(Statement::from_string(
             DbBackend::Sqlite,
             "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN \
-             ('work_task_contract', 'work_task_gate_result')".to_string(),
+             ('work_task_contract', 'work_task_gate_result')"
+                .to_string(),
         ))
         .await
         .unwrap();
@@ -79,15 +80,18 @@ async fn down_drops_only_the_specos_tables() {
             "display_text": "legacy",
             "prompt_blocks": [{ "type": "text", "text": "legacy" }],
         }),
+        task_kind: Default::default(),
     };
     let t = work_task_service::create(&db.conn, draft).await.unwrap();
     work_task_service::upsert_contract(&db.conn, contract_active(t.id))
         .await
         .unwrap();
 
-    // Revert the upstream title migration, then the Agent/Team/Context and
-    // contract migrations added by SpecOS.
-    Migrator::down(&db.conn, Some(3)).await.expect("down migrations");
+    // Revert the latest task-kind/integration handoff, memory, title,
+    // Agent/Team/Context, and contract migrations added after the legacy schema.
+    Migrator::down(&db.conn, Some(6))
+        .await
+        .expect("down migrations");
 
     let names = table_names(&db).await;
     assert!(!names.contains(&"work_task_contract".to_string()));
@@ -107,13 +111,17 @@ async fn down_drops_only_the_specos_tables() {
     assert!(names.contains(&"work_task".to_string()));
 
     // The legacy task row is still readable after the rollback.
-    let row = work_task::Entity::find()
-        .filter(work_task::Column::Id.eq(t.id))
-        .one(&db.conn)
+    let row = db
+        .conn
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT id, title FROM work_task WHERE id = {}", t.id),
+        ))
         .await
         .unwrap()
         .expect("legacy task readable");
-    assert_eq!(row.title, "legacy");
+    assert_eq!(row.try_get::<i32>("", "id").unwrap(), t.id);
+    assert_eq!(row.try_get::<String>("", "title").unwrap(), "legacy");
 }
 
 #[tokio::test]
@@ -127,6 +135,7 @@ async fn fk_cascade_removes_contract_and_gate_rows_with_the_task() {
             "display_text": "fk",
             "prompt_blocks": [{ "type": "text", "text": "fk" }],
         }),
+        task_kind: Default::default(),
     };
     let t = work_task_service::create(&db.conn, draft).await.unwrap();
 
@@ -155,7 +164,10 @@ async fn fk_cascade_removes_contract_and_gate_rows_with_the_task() {
     .unwrap();
 
     // Foreign keys are ON in the test harness; deleting the task must cascade.
-    let del = work_task::Entity::delete_by_id(t.id).exec(&db.conn).await.unwrap();
+    let del = work_task::Entity::delete_by_id(t.id)
+        .exec(&db.conn)
+        .await
+        .unwrap();
     assert_eq!(del.rows_affected, 1);
 
     let contract_count = work_task_contract::Entity::find()

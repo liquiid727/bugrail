@@ -67,6 +67,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         id: m.id,
         folder_id: m.folder_id,
         title: m.title,
+        task_kind: m.task_kind,
         config: serde_json::from_str(&m.config).unwrap_or(serde_json::Value::Null),
         status: m.status,
         failure_reason: m.failure_reason,
@@ -303,10 +304,7 @@ pub async fn list_by_status(
 /// and silently discarding a time the user picked for one particular task would
 /// start an agent earlier than they asked. That task's own start button (or a
 /// drag onto the In-progress column) still overrides the plan explicitly.
-pub async fn list_todo_ids(
-    conn: &DatabaseConnection,
-    folder_id: i32,
-) -> Result<Vec<i32>, DbError> {
+pub async fn list_todo_ids(conn: &DatabaseConnection, folder_id: i32) -> Result<Vec<i32>, DbError> {
     let rows = work_task::Entity::find()
         .filter(work_task::Column::DeletedAt.is_null())
         .filter(work_task::Column::FolderId.eq(folder_id))
@@ -483,6 +481,7 @@ pub async fn create_in_transaction<C: ConnectionTrait>(
         id: NotSet,
         folder_id: Set(draft.folder_id),
         title: Set(draft.title.trim().to_string()),
+        task_kind: Set(draft.task_kind),
         config: Set(config_str),
         status: Set(WorkTaskStatus::Todo),
         failure_reason: Set(None),
@@ -549,6 +548,7 @@ pub async fn update(
     let mut active = row.into_active_model();
     active.folder_id = Set(draft.folder_id);
     active.title = Set(draft.title.trim().to_string());
+    active.task_kind = Set(draft.task_kind);
     active.config = Set(config_str);
     active.updated_at = Set(Utc::now());
     Ok(to_info(active.update(conn).await?))
@@ -656,6 +656,11 @@ async fn claim_inner(
     action: Option<serde_json::Value>,
     only_unplanned: bool,
 ) -> Result<Option<i32>, DbError> {
+    let _dependency_guard = if actor == "team_orchestrator" {
+        None
+    } else {
+        Some(specos_runtime_service::dependency_write_guard().await)
+    };
     let now = Utc::now();
     let txn = conn.begin().await?;
     // Team materialization parks the whole DAG in `queued`; the pump's
@@ -787,6 +792,7 @@ pub async fn auto_claim_next(
     folder_id: i32,
     max_concurrent: i32,
 ) -> Result<Option<i32>, DbError> {
+    let _dependency_guard = specos_runtime_service::dependency_write_guard().await;
     let mut skip: Vec<i32> = Vec::new();
     loop {
         // Head lookup runs outside the transaction so the write stays first;
@@ -940,6 +946,7 @@ pub async fn claim_due_scheduled(
     conn: &DatabaseConnection,
     now: chrono::DateTime<Utc>,
 ) -> Result<Vec<(i32, i32)>, DbError> {
+    let _dependency_guard = specos_runtime_service::dependency_write_guard().await;
     // Live folders only: a task of a removed folder is unschedulable, exactly
     // as it is for the pump and the auto arm.
     let due = work_task::Entity::find()
@@ -971,7 +978,10 @@ pub async fn claim_due_scheduled(
                 work_task::Column::ScheduledAt,
                 Expr::value(None::<chrono::DateTime<Utc>>),
             )
-            .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
+            .col_expr(
+                work_task::Column::FailureReason,
+                Expr::value(None::<String>),
+            )
             .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
             // Same reason as every other claim: the settle path treats a
             // present `verdict` as this generation's self-report.
@@ -990,6 +1000,10 @@ pub async fn claim_due_scheduled(
             .await?;
         if res.rows_affected != 1 {
             // Started by hand, re-planned, or deleted since the scan.
+            txn.rollback().await?;
+            continue;
+        }
+        if !specos_runtime_service::dependencies_satisfied(&txn, row.id).await? {
             txn.rollback().await?;
             continue;
         }
@@ -1124,7 +1138,12 @@ pub async fn begin_setup(
     id: i32,
     run_seq: i32,
 ) -> Result<bool, DbError> {
+    let _dependency_guard = specos_runtime_service::dependency_write_guard().await;
     let txn = conn.begin().await?;
+    if !specos_runtime_service::dependencies_satisfied(&txn, id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -1360,8 +1379,51 @@ pub async fn set_verdict(
     verdict: &str,
     summary: Option<&str>,
 ) -> Result<bool, DbError> {
-    let now = Utc::now();
     let txn = conn.begin().await?;
+    let changed = set_verdict_on(&txn, id, run_seq, verdict, summary).await?;
+    if !changed {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// Record a correlated agent handoff and its verdict atomically. A failed
+/// verdict CAS rolls back the handoff, so a stale session cannot leave a
+/// seemingly valid source handoff behind.
+pub async fn set_verdict_with_handoff(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    verdict: &str,
+    summary: Option<&str>,
+    handoff: crate::models::WorkTaskHandoffDraft,
+) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    if let Err(error) =
+        specos_runtime_service::save_agent_handoff_on(&txn, id, run_seq, handoff).await
+    {
+        txn.rollback().await?;
+        return Err(error);
+    }
+    let changed = set_verdict_on(&txn, id, run_seq, verdict, summary).await?;
+    if !changed {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    txn.commit().await?;
+    Ok(true)
+}
+
+async fn set_verdict_on<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+    run_seq: i32,
+    verdict: &str,
+    summary: Option<&str>,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Verdict,
@@ -1379,21 +1441,19 @@ pub async fn set_verdict(
                 .is_in([WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput]),
         )
         .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
+        .exec(conn)
         .await?;
     if res.rows_affected != 1 {
-        txn.rollback().await?;
         return Ok(false);
     }
     record_event(
-        &txn,
+        conn,
         id,
         "agent_verdict",
         "agent",
         Some(serde_json::json!({ "verdict": verdict, "summary": summary })),
     )
     .await?;
-    txn.commit().await?;
     Ok(true)
 }
 
@@ -1515,6 +1575,12 @@ pub async fn begin_merge(
     auto: bool,
     expect_pending_merge: Option<&str>,
 ) -> Result<Option<i32>, DbError> {
+    if specos_runtime_service::integration_source_is_reserved(conn, id).await? {
+        return Err(DbError::Validation(
+            "workTask.integration.sourceReserved: source must land through its integration task"
+                .into(),
+        ));
+    }
     let state_json = serde_json::to_string(state)
         .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
     let now = Utc::now();
@@ -1729,11 +1795,12 @@ pub async fn merge_landed(
     id: i32,
     merge_commit: &str,
 ) -> Result<bool, DbError> {
-    if let Some(path) = specos_runtime_service::folder_path_for_task(conn, id).await? {
-        specos_runtime_service::assert_integration_landing(conn, id, &path, merge_commit).await?;
-    }
+    let folder_path = specos_runtime_service::folder_path_for_task(conn, id).await?;
     let now = Utc::now();
     let txn = conn.begin().await?;
+    if let Some(path) = folder_path.as_deref() {
+        specos_runtime_service::assert_integration_landing(&txn, id, path, merge_commit).await?;
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -1754,6 +1821,7 @@ pub async fn merge_landed(
         txn.rollback().await?;
         return Ok(false);
     }
+    specos_runtime_service::settle_integration_sources(&txn, id, merge_commit).await?;
     status_changed_event(
         &txn,
         id,
@@ -1784,6 +1852,12 @@ pub async fn complete_without_merge(
     id: i32,
     reason: &str,
 ) -> Result<bool, DbError> {
+    if specos_runtime_service::integration_source_is_reserved(conn, id).await? {
+        return Err(DbError::Validation(
+            "workTask.integration.sourceReserved: source must land through its integration task"
+                .into(),
+        ));
+    }
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -2158,7 +2232,10 @@ pub async fn clear_worktree_by_folder(
         return Ok(ids);
     }
     work_task::Entity::update_many()
-        .col_expr(work_task::Column::WorktreeFolderId, Expr::value(None::<i32>))
+        .col_expr(
+            work_task::Column::WorktreeFolderId,
+            Expr::value(None::<i32>),
+        )
         .col_expr(work_task::Column::CleanupState, Expr::value(None::<String>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(work_task::Column::WorktreeFolderId.eq(folder_id))
@@ -2651,6 +2728,7 @@ mod tests {
                 "display_text": "do the thing",
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
             }),
+            task_kind: Default::default(),
         }
     }
 
@@ -2879,12 +2957,16 @@ mod tests {
         let later = create(&db.conn, draft(folder_id, "later")).await.unwrap();
 
         let now = Utc::now();
-        assert!(set_schedule(&db.conn, due.id, Some(now - chrono::Duration::minutes(1)))
-            .await
-            .unwrap());
-        assert!(set_schedule(&db.conn, later.id, Some(now + chrono::Duration::hours(2)))
-            .await
-            .unwrap());
+        assert!(
+            set_schedule(&db.conn, due.id, Some(now - chrono::Duration::minutes(1)))
+                .await
+                .unwrap()
+        );
+        assert!(
+            set_schedule(&db.conn, later.id, Some(now + chrono::Duration::hours(2)))
+                .await
+                .unwrap()
+        );
         assert!(get(&db.conn, due.id).await.unwrap().scheduled_at.is_some());
 
         // Only what is due is claimed, and the plan is consumed by the claim.
@@ -2907,7 +2989,11 @@ mod tests {
 
         // Clearing puts the task back under manual/auto control.
         assert!(set_schedule(&db.conn, later.id, None).await.unwrap());
-        assert!(get(&db.conn, later.id).await.unwrap().scheduled_at.is_none());
+        assert!(get(&db.conn, later.id)
+            .await
+            .unwrap()
+            .scheduled_at
+            .is_none());
         let events = list_events(&db.conn, later.id, 50).await.unwrap();
         let actions: Vec<&str> = events
             .iter()
@@ -2947,18 +3033,30 @@ mod tests {
         // Plan it, then stop it: the plan goes with the cancel, and requeuing
         // must not bring it back.
         let now = Utc::now();
-        assert!(set_schedule(&db.conn, t.id, Some(now + chrono::Duration::hours(1)))
-            .await
-            .unwrap());
+        assert!(
+            set_schedule(&db.conn, t.id, Some(now + chrono::Duration::hours(1)))
+                .await
+                .unwrap()
+        );
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
-        assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
+        assert!(get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .scheduled_at
+            .is_none());
         assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
-        assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
+        assert!(get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .scheduled_at
+            .is_none());
 
         // A due plan claims the task and clears the stale verdict with it.
-        assert!(set_schedule(&db.conn, t.id, Some(now - chrono::Duration::minutes(1)))
-            .await
-            .unwrap());
+        assert!(
+            set_schedule(&db.conn, t.id, Some(now - chrono::Duration::minutes(1)))
+                .await
+                .unwrap()
+        );
         assert_eq!(
             claim_due_scheduled(&db.conn, now).await.unwrap(),
             vec![(t.id, folder_id)]
@@ -2973,7 +3071,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(start_running(&db.conn, t.id, seq, 1, "c2").await.unwrap());
-        assert!(set_verdict(&db.conn, t.id, seq, "blocked", None).await.unwrap());
+        assert!(set_verdict(&db.conn, t.id, seq, "blocked", None)
+            .await
+            .unwrap());
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
         assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         assert_eq!(
@@ -2989,16 +3089,21 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/wt-schedule-bulk").await;
         let planned = create(&db.conn, draft(folder_id, "planned")).await.unwrap();
         let plain = create(&db.conn, draft(folder_id, "plain")).await.unwrap();
-        assert!(
-            set_schedule(&db.conn, planned.id, Some(Utc::now() + chrono::Duration::hours(3)))
-                .await
-                .unwrap()
-        );
+        assert!(set_schedule(
+            &db.conn,
+            planned.id,
+            Some(Utc::now() + chrono::Duration::hours(3))
+        )
+        .await
+        .unwrap());
 
         // "Start all" and the auto-process arm both leave the plan alone —
         // `planned` is the board head, so this also proves the head lookup
         // skips it rather than stopping there.
-        assert_eq!(list_todo_ids(&db.conn, folder_id).await.unwrap(), vec![plain.id]);
+        assert_eq!(
+            list_todo_ids(&db.conn, folder_id).await.unwrap(),
+            vec![plain.id]
+        );
         assert_eq!(
             auto_claim_next(&db.conn, folder_id, 0).await.unwrap(),
             Some(plain.id)
@@ -3025,11 +3130,17 @@ mod tests {
         );
 
         // The task's own start button overrides the plan and consumes it.
-        assert!(claim_for_run(&db.conn, planned.id, WorkTaskStatus::Todo, "user")
+        assert!(
+            claim_for_run(&db.conn, planned.id, WorkTaskStatus::Todo, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(get(&db.conn, planned.id)
             .await
             .unwrap()
-            .is_some());
-        assert!(get(&db.conn, planned.id).await.unwrap().scheduled_at.is_none());
+            .scheduled_at
+            .is_none());
     }
 
     #[tokio::test]
@@ -3280,8 +3391,12 @@ mod tests {
 
         let seq = to_review(&db, t.id).await;
         // Stale generation writes nothing; the current one lands on the row.
-        assert!(!set_review_error(&db.conn, t.id, seq + 1, "stale").await.unwrap());
-        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch").await.unwrap());
+        assert!(!set_review_error(&db.conn, t.id, seq + 1, "stale")
+            .await
+            .unwrap());
+        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch")
+            .await
+            .unwrap());
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
             Some("wrong branch")
@@ -3313,7 +3428,9 @@ mod tests {
         assert!(get(&db.conn, t.id).await.unwrap().last_error.is_none());
 
         // Back in clean review for the unattended path proper.
-        assert!(merge_back_to_review(&db.conn, t.id, None, None).await.unwrap());
+        assert!(merge_back_to_review(&db.conn, t.id, None, None)
+            .await
+            .unwrap());
         assert!(begin_merge(&db.conn, t.id, &state, seq + 1, true, None)
             .await
             .unwrap()
@@ -3334,7 +3451,10 @@ mod tests {
         );
         assert!(events.iter().any(|e| {
             e.kind == "status_changed"
-                && e.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str())
+                && e.payload
+                    .as_ref()
+                    .and_then(|p| p.get("to"))
+                    .and_then(|v| v.as_str())
                     == Some("merging")
                 && e.payload
                     .as_ref()
@@ -3430,17 +3550,27 @@ mod tests {
         let seq = to_review(&db, t.id).await;
         // A banner from an earlier refusal is what the user is answering by
         // clicking merge again; queuing clears it.
-        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch").await.unwrap());
+        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch")
+            .await
+            .unwrap());
         // A stale generation misses, the current one lands.
-        assert!(!queue_merge(&db.conn, t.id, &intent, seq + 1, None).await.unwrap());
-        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        assert!(!queue_merge(&db.conn, t.id, &intent, seq + 1, None)
+            .await
+            .unwrap());
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None)
+            .await
+            .unwrap());
         let row = get_model(&db.conn, t.id).await.unwrap();
         assert!(row.last_error.is_none());
         assert_eq!(row.status, WorkTaskStatus::Review);
         let parked = queued_merge(row.pending_merge.as_deref()).expect("intent parked");
         assert_eq!(parked.message.as_deref(), Some("feat: land it"));
         assert!(parked.delete_worktree);
-        let on_wire = get(&db.conn, t.id).await.unwrap().merge_queued.expect("on the wire");
+        let on_wire = get(&db.conn, t.id)
+            .await
+            .unwrap()
+            .merge_queued
+            .expect("on the wire");
         assert_eq!(on_wire.queued_at, parked.queued_at);
         // The options ride along, so reopening the dialog can show what is
         // parked instead of quietly replacing it with the defaults.
@@ -3454,7 +3584,9 @@ mod tests {
             delete_worktree: false,
             queued_at: parked.queued_at,
         };
-        assert!(queue_merge(&db.conn, t.id, &edited, seq, None).await.unwrap());
+        assert!(queue_merge(&db.conn, t.id, &edited, seq, None)
+            .await
+            .unwrap());
         let row = get_model(&db.conn, t.id).await.unwrap();
         let parked = queued_merge(row.pending_merge.as_deref()).unwrap();
         assert_eq!(parked.queued_at, edited.queued_at);
@@ -3523,7 +3655,9 @@ mod tests {
 
         // Withdrawn under the pump: the dispatch must miss, and the task must
         // stay in review rather than land a merge nobody wants anymore.
-        let withdrawn = create(&db.conn, draft(folder_id, "withdrawn")).await.unwrap();
+        let withdrawn = create(&db.conn, draft(folder_id, "withdrawn"))
+            .await
+            .unwrap();
         let seq = to_review(&db, withdrawn.id).await;
         assert!(queue_merge(&db.conn, withdrawn.id, &intent(1), seq, None)
             .await
@@ -3569,7 +3703,9 @@ mod tests {
             "the pump must not re-park an intent the user replaced"
         );
         // … and the refusal path must not sweep up the newer request.
-        assert!(!clear_queued_merge(&db.conn, edited.id, &claim).await.unwrap());
+        assert!(!clear_queued_merge(&db.conn, edited.id, &claim)
+            .await
+            .unwrap());
         let parked = queued_merge(
             get_model(&db.conn, edited.id)
                 .await
@@ -3616,10 +3752,12 @@ mod tests {
             .await
             .unwrap());
         let claim = scanned(&db, clean.id).await;
-        assert!(begin_merge(&db.conn, clean.id, &state, seq, false, Some(&claim))
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            begin_merge(&db.conn, clean.id, &state, seq, false, Some(&claim))
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(
             get_model(&db.conn, clean.id).await.unwrap().status,
             WorkTaskStatus::Merging
@@ -3644,7 +3782,9 @@ mod tests {
             delete_worktree: true,
             queued_at: Utc::now(),
         };
-        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None)
+            .await
+            .unwrap());
         assert!(unqueue_merge(&db.conn, t.id).await.unwrap());
         assert!(get_model(&db.conn, t.id)
             .await
@@ -3671,7 +3811,9 @@ mod tests {
         // The engine's refusal path clears without a timeline entry — the
         // reason it writes on the row is what the user reads — and only when
         // the row still holds the exact intent being refused.
-        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None)
+            .await
+            .unwrap());
         let parked = get_model(&db.conn, t.id)
             .await
             .unwrap()
@@ -3721,13 +3863,19 @@ mod tests {
         };
 
         // Follow-up (claim for a new run).
-        let followed = create(&db.conn, draft(folder_id, "followed")).await.unwrap();
-        let seq = to_review(&db, followed.id).await;
-        assert!(queue_merge(&db.conn, followed.id, &intent, seq, None).await.unwrap());
-        assert!(claim_for_run(&db.conn, followed.id, WorkTaskStatus::Review, "user")
+        let followed = create(&db.conn, draft(folder_id, "followed"))
             .await
-            .unwrap()
-            .is_some());
+            .unwrap();
+        let seq = to_review(&db, followed.id).await;
+        assert!(queue_merge(&db.conn, followed.id, &intent, seq, None)
+            .await
+            .unwrap());
+        assert!(
+            claim_for_run(&db.conn, followed.id, WorkTaskStatus::Review, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(get_model(&db.conn, followed.id)
             .await
             .unwrap()
@@ -3737,7 +3885,9 @@ mod tests {
         // Stopped.
         let stopped = create(&db.conn, draft(folder_id, "stopped")).await.unwrap();
         let seq = to_review(&db, stopped.id).await;
-        assert!(queue_merge(&db.conn, stopped.id, &intent, seq, None).await.unwrap());
+        assert!(queue_merge(&db.conn, stopped.id, &intent, seq, None)
+            .await
+            .unwrap());
         assert!(cancel(&db.conn, stopped.id, None).await.unwrap());
         assert!(get_model(&db.conn, stopped.id)
             .await
@@ -3746,12 +3896,18 @@ mod tests {
             .is_none());
 
         // Accepted with nothing to land.
-        let finished = create(&db.conn, draft(folder_id, "finished")).await.unwrap();
+        let finished = create(&db.conn, draft(folder_id, "finished"))
+            .await
+            .unwrap();
         let seq = to_review(&db, finished.id).await;
-        assert!(queue_merge(&db.conn, finished.id, &intent, seq, None).await.unwrap());
-        assert!(complete_without_merge(&db.conn, finished.id, "nothing to merge")
+        assert!(queue_merge(&db.conn, finished.id, &intent, seq, None)
             .await
             .unwrap());
+        assert!(
+            complete_without_merge(&db.conn, finished.id, "nothing to merge")
+                .await
+                .unwrap()
+        );
         assert!(get_model(&db.conn, finished.id)
             .await
             .unwrap()
@@ -3786,9 +3942,11 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(merge_back_to_review(&db.conn, t.id, Some("nope".into()), None)
-            .await
-            .unwrap());
+        assert!(
+            merge_back_to_review(&db.conn, t.id, Some("nope".into()), None)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
             Some("nope")
@@ -4016,13 +4174,20 @@ mod tests {
         assert!(!soft_delete(&db.conn, t.id, WorkTaskStatus::Queued)
             .await
             .unwrap());
-        assert_eq!(get(&db.conn, t.id).await.unwrap().status, WorkTaskStatus::Todo);
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
 
-        assert!(soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(soft_delete(&db.conn, t.id, WorkTaskStatus::Todo)
+            .await
+            .unwrap());
         assert!(get(&db.conn, t.id).await.is_err());
         assert!(list(&db.conn, Some(folder_id)).await.unwrap().is_empty());
         // A second delete is a clean no-op rather than a second tombstone.
-        assert!(!soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(!soft_delete(&db.conn, t.id, WorkTaskStatus::Todo)
+            .await
+            .unwrap());
     }
 
     /// Drive a claimed (queued) task all the way to running, the way a launch

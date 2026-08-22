@@ -6,10 +6,11 @@ use sea_orm::{
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::db::entities::{
-    folder, team_run, team_run_task, work_task, work_task_dependency, work_task_handoff,
-    work_task_run,
+    folder, team_run, team_run_task, work_task, work_task_contract, work_task_dependency,
+    work_task_handoff, work_task_run,
 };
 use crate::db::error::DbError;
 use crate::models::{
@@ -219,21 +220,95 @@ async fn integration_source_ready<C: ConnectionTrait>(
     if parent.status != crate::db::entities::work_task::WorkTaskStatus::Review {
         return Ok(false);
     }
-    if parent
+    let Some(folder) = folder::Entity::find_by_id(parent.folder_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let Some(branch) = parent
         .work_branch
         .as_deref()
         .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
+        .filter(|b| !b.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Ok(Some(head)) = crate::work_task::git::local_branch_tip(&folder.path, branch).await else {
+        return Ok(false);
+    };
+    let Some(contract) = work_task_contract::Entity::find_by_id(parent.id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let spec_stale = crate::work_task::spec_reader::spec_stale(
+        Path::new(&folder.path),
+        &contract.source_spec_path,
+        &contract.source_spec_hash,
+    )
+    .unwrap_or(true);
+    if spec_stale
+        || !crate::db::service::work_task_service::gate_decision(
+            conn,
+            parent.id,
+            Some(&head),
+            spec_stale,
+        )
+        .await?
+        .eligible
     {
         return Ok(false);
     }
-    Ok(work_task_handoff::Entity::find()
+    let Some(handoff) = work_task_handoff::Entity::find()
         .filter(work_task_handoff::Column::TaskId.eq(parent.id))
         .filter(work_task_handoff::Column::RunSeq.eq(parent.run_seq))
         .one(conn)
         .await?
-        .is_some())
+    else {
+        return Ok(false);
+    };
+    Ok(handoff.actor == "agent"
+        && handoff.source_branch.as_deref() == Some(branch)
+        && handoff.source_head.as_deref() == Some(head.as_str()))
+}
+
+/// True while a source is reserved by a live integration task. Source tasks
+/// remain in review until the integration landing transaction proves their
+/// captured heads are contained and settles them together.
+pub async fn integration_source_is_reserved<C: ConnectionTrait>(
+    conn: &C,
+    source_task_id: i32,
+) -> Result<bool, DbError> {
+    let edges = work_task_dependency::Entity::find()
+        .filter(work_task_dependency::Column::ParentTaskId.eq(source_task_id))
+        .filter(work_task_dependency::Column::Kind.eq("integration_source"))
+        .all(conn)
+        .await?;
+    for edge in edges {
+        let Some(integration) = work_task::Entity::find_by_id(edge.child_task_id)
+            .one(conn)
+            .await?
+        else {
+            continue;
+        };
+        if integration.deleted_at.is_none()
+            && matches!(
+                integration.status,
+                work_task::WorkTaskStatus::Todo
+                    | work_task::WorkTaskStatus::Queued
+                    | work_task::WorkTaskStatus::Preparing
+                    | work_task::WorkTaskStatus::Running
+                    | work_task::WorkTaskStatus::AwaitingInput
+                    | work_task::WorkTaskStatus::Review
+                    | work_task::WorkTaskStatus::Merging
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub const UNMET_DEPENDENCY: &str = "workTask.dependency.unmet";
@@ -285,9 +360,13 @@ pub async fn team_task_launch_allowed<C: ConnectionTrait>(
     Ok(active < run.max_concurrent as u64)
 }
 
-/// Serializes folder-graph writers so two concurrent opposite edges cannot
-/// both pass a check-then-insert cycle test.
+/// Serializes dependency writers and claim/setup readiness checks so a task
+/// cannot be claimed from a graph snapshot that an edge writer is changing.
 static DEPENDENCY_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub async fn dependency_write_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    DEPENDENCY_WRITE.lock().await
+}
 
 pub async fn add_dependency<C: ConnectionTrait>(
     conn: &C,
@@ -295,7 +374,7 @@ pub async fn add_dependency<C: ConnectionTrait>(
     child_task_id: i32,
     kind: &str,
 ) -> Result<(), DbError> {
-    let _guard = DEPENDENCY_WRITE.lock().await;
+    let _guard = dependency_write_guard().await;
     add_dependency_locked(conn, parent_task_id, child_task_id, kind).await
 }
 
@@ -334,10 +413,28 @@ async fn add_dependency_locked<C: ConnectionTrait>(
             "dependencies require live tasks in the same project".into(),
         ));
     }
+    if kind == "integration_source"
+        && child.task_kind != crate::db::entities::work_task::WorkTaskKind::Integration
+    {
+        return Err(DbError::Validation(
+            "integration_source dependencies require an integration task".into(),
+        ));
+    }
+    if !matches!(
+        child.status,
+        crate::db::entities::work_task::WorkTaskStatus::Todo
+            | crate::db::entities::work_task::WorkTaskStatus::Failed
+            | crate::db::entities::work_task::WorkTaskStatus::Canceled
+    ) {
+        return Err(DbError::Validation(
+            "dependencies cannot change after a task is claimed".into(),
+        ));
+    }
     let edges = work_task_dependency::Entity::find().all(conn).await?;
-    if edges.iter().any(|e| {
-        e.parent_task_id == parent_task_id && e.child_task_id == child_task_id
-    }) {
+    if edges
+        .iter()
+        .any(|e| e.parent_task_id == parent_task_id && e.child_task_id == child_task_id)
+    {
         return Err(DbError::Validation("duplicate dependency".into()));
     }
     let mut children: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
@@ -397,6 +494,47 @@ pub async fn save_handoff(
     task_id: i32,
     draft: WorkTaskHandoffDraft,
 ) -> Result<WorkTaskHandoffInfo, DbError> {
+    save_handoff_with_actor(conn, task_id, draft, "human").await
+}
+
+pub async fn save_agent_handoff(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+    draft: WorkTaskHandoffDraft,
+) -> Result<WorkTaskHandoffInfo, DbError> {
+    save_agent_handoff_on(conn, task_id, run_seq, draft).await
+}
+
+pub async fn save_agent_handoff_on<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    run_seq: i32,
+    draft: WorkTaskHandoffDraft,
+) -> Result<WorkTaskHandoffInfo, DbError> {
+    let task = work_task::Entity::find_by_id(task_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {task_id}")))?;
+    if task.run_seq != run_seq
+        || !matches!(
+            task.status,
+            work_task::WorkTaskStatus::Running | work_task::WorkTaskStatus::AwaitingInput
+        )
+    {
+        return Err(DbError::Validation(
+            "handoff must match the live WorkTask run".into(),
+        ));
+    }
+    save_handoff_with_actor(conn, task_id, draft, "agent").await
+}
+
+async fn save_handoff_with_actor(
+    conn: &impl ConnectionTrait,
+    task_id: i32,
+    draft: WorkTaskHandoffDraft,
+    actor: &str,
+) -> Result<WorkTaskHandoffInfo, DbError> {
     if draft.summary.trim().is_empty() {
         return Err(DbError::Validation("handoff summary is required".into()));
     }
@@ -429,6 +567,22 @@ pub async fn save_handoff(
         .one(conn)
         .await?
         .ok_or_else(|| DbError::NotFound(format!("work task {task_id}")))?;
+    let source_branch = task
+        .work_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string);
+    let source_head = if let (Some(branch), Some(path)) = (
+        source_branch.as_deref(),
+        folder_path_for_task(conn, task_id).await?,
+    ) {
+        crate::work_task::git::local_branch_tip(&path, branch)
+            .await
+            .map_err(|e| DbError::Validation(format!("handoff Git probe failed: {e}")))?
+    } else {
+        None
+    };
     let now = Utc::now();
     let active = work_task_handoff::ActiveModel {
         task_id: Set(task_id),
@@ -439,13 +593,16 @@ pub async fn save_handoff(
         open_questions: Set(
             serde_json::to_string(&draft.open_questions).unwrap_or_else(|_| "[]".into())
         ),
+        actor: Set(actor.to_string()),
+        source_branch: Set(source_branch),
+        source_head: Set(source_head),
         created_at: Set(now),
     };
     work_task_handoff::Entity::delete_by_id((task_id, task.run_seq))
         .exec(conn)
         .await?;
     let row = active.insert(conn).await?;
-    Ok(handoff_info(row, Some(&task)))
+    Ok(handoff_info(row))
 }
 
 pub async fn get_handoff(
@@ -465,20 +622,20 @@ pub async fn get_handoff(
     let Some(row) = row else {
         return Ok(None);
     };
-    let task = work_task::Entity::find_by_id(task_id).one(conn).await?;
-    Ok(Some(handoff_info(row, task.as_ref())))
+    Ok(Some(handoff_info(row)))
 }
 
-fn handoff_info(row: work_task_handoff::Model, task: Option<&work_task::Model>) -> WorkTaskHandoffInfo {
+fn handoff_info(row: work_task_handoff::Model) -> WorkTaskHandoffInfo {
     WorkTaskHandoffInfo {
         task_id: row.task_id,
         run_seq: row.run_seq,
+        actor: row.actor,
         summary: row.summary,
         artifacts: serde_json::from_str(&row.artifacts).unwrap_or_default(),
         risks: serde_json::from_str(&row.risks).unwrap_or_default(),
         open_questions: serde_json::from_str(&row.open_questions).unwrap_or_default(),
-        source_branch: task.and_then(|t| t.work_branch.clone()),
-        source_head: None,
+        source_branch: row.source_branch,
+        source_head: row.source_head,
         created_at: row.created_at,
     }
 }
@@ -656,45 +813,123 @@ pub async fn integration_plan(
             .one(conn)
             .await?
             .ok_or_else(|| DbError::NotFound(format!("work task {}", edge.parent_task_id)))?;
-        let has_handoff = work_task_handoff::Entity::find()
+        let handoff = work_task_handoff::Entity::find()
             .filter(work_task_handoff::Column::TaskId.eq(parent.id))
             .filter(work_task_handoff::Column::RunSeq.eq(parent.run_seq))
             .one(conn)
-            .await?
-            .is_some();
-        let captured = snapshot
-            .and_then(|s| s.sources.iter().find(|c| c.task_id == parent.id));
-        let current_head = match (repo_path, parent.work_branch.as_deref()) {
+            .await?;
+        let has_handoff = handoff.is_some();
+        let captured = snapshot.and_then(|s| s.sources.iter().find(|c| c.task_id == parent.id));
+        let branch = parent
+            .work_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty());
+        let current_head = match (repo_path, branch) {
             (Some(path), Some(branch)) if !branch.trim().is_empty() => {
-                crate::work_task::git::rev_parse(path, branch).await.ok()
+                crate::work_task::git::local_branch_tip(path, branch)
+                    .await
+                    .map_err(|e| {
+                        DbError::Validation(format!(
+                            "workTask.integration.invalidSource: source {} Git probe failed: {e}",
+                            parent.id
+                        ))
+                    })?
             }
             _ => None,
         };
+        let git_branch_exists = current_head.is_some();
+        let contract = work_task_contract::Entity::find_by_id(parent.id)
+            .one(conn)
+            .await?;
+        let spec_current = match (repo_path, contract.as_ref()) {
+            (Some(path), Some(contract)) => !crate::work_task::spec_reader::spec_stale(
+                Path::new(path),
+                &contract.source_spec_path,
+                &contract.source_spec_hash,
+            )
+            .unwrap_or(true),
+            _ => false,
+        };
+        let gates_eligible = match (contract.as_ref(), current_head.as_deref()) {
+            (Some(_), Some(head)) => {
+                crate::db::service::work_task_service::gate_decision(
+                    conn,
+                    parent.id,
+                    Some(head),
+                    !spec_current,
+                )
+                .await?
+                .eligible
+            }
+            _ => false,
+        };
+        let handoff_trusted = handoff.as_ref().is_some_and(|handoff| {
+            handoff.actor == "agent"
+                && handoff.source_branch.as_deref() == branch
+                && handoff.source_head.as_deref() == current_head.as_deref()
+        });
         let stale = match captured {
             Some(c) => {
-                c.run_seq != parent.run_seq
-                    || current_head
-                        .as_deref()
-                        .is_some_and(|head| head != c.head)
+                c.run_seq != parent.run_seq || current_head.as_deref() != Some(c.head.as_str())
             }
             None => false,
+        };
+        let eligibility_reason = if parent.status != work_task::WorkTaskStatus::Review {
+            Some("source task is not in review".to_string())
+        } else if !has_handoff {
+            Some("source handoff is missing for the live run".to_string())
+        } else if !handoff_trusted {
+            Some("source handoff is not agent-correlated to the current branch head".to_string())
+        } else if !git_branch_exists {
+            Some("source local branch is missing or Git truth is unavailable".to_string())
+        } else if contract.is_none() {
+            Some("source has no bound Spec contract".to_string())
+        } else if !spec_current {
+            Some("source Spec hash is stale or unreadable".to_string())
+        } else if !gates_eligible {
+            Some("source quality gates are not eligible".to_string())
+        } else if stale {
+            Some("source run or branch head changed after plan capture".to_string())
+        } else {
+            None
         };
         sources.push(IntegrationSourceInfo {
             task_id: parent.id,
             title: parent.title,
             status: crate::db::service::work_task_service::status_str(parent.status).into(),
             run_seq: parent.run_seq,
-            branch: parent.work_branch,
+            branch: branch.map(str::to_string),
             current_head,
             captured_head: captured.map(|c| c.head.clone()),
             captured_run_seq: captured.map(|c| c.run_seq),
             has_handoff,
+            handoff_trusted,
+            git_branch_exists,
+            spec_current,
+            gates_eligible,
+            eligibility_reason,
             merge_order: order as i32,
             stale,
         });
     }
-    let conflicts = match repo_path {
-        Some(path) if crate::work_task::git::has_merge_head(path).await.unwrap_or(false) => {
+    let conflict_path = match task.worktree_folder_id {
+        Some(worktree_folder_id) => folder::Entity::find_by_id(worktree_folder_id)
+            .one(conn)
+            .await?
+            .map(|folder| folder.path),
+        None => repo_path.map(str::to_string),
+    };
+    let conflicts = match conflict_path.as_deref() {
+        Some(path)
+            if crate::work_task::git::has_merge_head(path)
+                .await
+                .map_err(|e| {
+                    DbError::Validation(format!(
+                        "workTask.integration.invalidSource: Git probe failed: {e}"
+                    ))
+                })? =>
+        {
             vec!["MERGE_HEAD".into()]
         }
         _ => Vec::new(),
@@ -708,9 +943,16 @@ pub async fn integration_plan(
     } else if sources.iter().any(|s| s.stale) {
         "stale"
     } else if sources.iter().any(|s| {
-        s.status != "review" || !s.has_handoff || s.branch.as_deref().unwrap_or("").is_empty()
+        s.status != "review"
+            || !s.has_handoff
+            || !s.handoff_trusted
+            || !s.git_branch_exists
+            || !s.spec_current
+            || !s.gates_eligible
     }) {
         "waiting_source"
+    } else if sources.iter().any(|s| s.captured_head.is_none()) {
+        "stale"
     } else {
         "eligible"
     };
@@ -730,16 +972,28 @@ pub async fn refresh_integration_plan(
     let plan = integration_plan(conn, task_id, Some(repo_path)).await?;
     let mut sources = Vec::new();
     for source in &plan.sources {
-        let head = source
-            .current_head
-            .clone()
-            .or(source.captured_head.clone())
-            .ok_or_else(|| {
-                DbError::Validation(format!(
-                    "workTask.integration.invalidSource: source {} has no head",
-                    source.task_id
-                ))
-            })?;
+        if source.status != "review"
+            || !source.has_handoff
+            || !source.handoff_trusted
+            || !source.git_branch_exists
+            || !source.spec_current
+            || !source.gates_eligible
+        {
+            return Err(DbError::Validation(format!(
+                "workTask.integration.ineligibleSource: source {}: {}",
+                source.task_id,
+                source
+                    .eligibility_reason
+                    .as_deref()
+                    .unwrap_or("source facts are not eligible")
+            )));
+        }
+        let head = source.current_head.clone().ok_or_else(|| {
+            DbError::Validation(format!(
+                "workTask.integration.invalidSource: source {} has no head",
+                source.task_id
+            ))
+        })?;
         let branch = source.branch.clone().ok_or_else(|| {
             DbError::Validation(format!(
                 "workTask.integration.invalidSource: source {} has no branch",
@@ -770,13 +1024,14 @@ async fn write_integration_snapshot(
     let mut cfg = serde_json::from_str::<WorkTaskConfig>(&row.config).unwrap_or_default();
     cfg.integration_snapshot = Some(snapshot);
     let mut active = row.into_active_model();
-    active.config = Set(serde_json::to_string(&cfg).map_err(|e| DbError::Validation(e.to_string()))?);
+    active.config =
+        Set(serde_json::to_string(&cfg).map_err(|e| DbError::Validation(e.to_string()))?);
     active.update(conn).await?;
     Ok(())
 }
 
-pub async fn assert_integration_landing(
-    conn: &DatabaseConnection,
+pub async fn assert_integration_landing<C: ConnectionTrait>(
+    conn: &C,
     task_id: i32,
     repo_path: &str,
     landing_sha: &str,
@@ -802,11 +1057,47 @@ pub async fn assert_integration_landing(
             "workTask.integration.stalePlan: captured source set does not match".into(),
         ));
     }
-    for source in snapshot.sources {
-        let contained =
-            crate::work_task::git::is_ancestor(repo_path, &source.head, landing_sha)
-                .await
-                .map_err(|e| DbError::Validation(e.to_string()))?;
+    let edge_ids = edges
+        .iter()
+        .map(|edge| edge.parent_task_id)
+        .collect::<BTreeSet<_>>();
+    for source in &snapshot.sources {
+        if !edge_ids.contains(&source.task_id) {
+            return Err(DbError::Validation(format!(
+                "workTask.integration.stalePlan: source {} is not in the live source set",
+                source.task_id
+            )));
+        }
+        let source_task = work_task::Entity::find_by_id(source.task_id)
+            .one(conn)
+            .await?
+            .ok_or_else(|| DbError::NotFound(format!("work task {}", source.task_id)))?;
+        if source_task.status != work_task::WorkTaskStatus::Review
+            || source_task.run_seq != source.run_seq
+        {
+            return Err(DbError::Validation(format!(
+                "workTask.integration.stalePlan: source {} run changed before landing",
+                source.task_id
+            )));
+        }
+        let current_head = crate::work_task::git::local_branch_tip(repo_path, &source.branch)
+            .await
+            .map_err(|e| DbError::Validation(format!("workTask.integration.invalidSource: {e}")))?
+            .ok_or_else(|| {
+                DbError::Validation(format!(
+                    "workTask.integration.stalePlan: source branch {} no longer exists",
+                    source.branch
+                ))
+            })?;
+        if current_head != source.head {
+            return Err(DbError::Validation(format!(
+                "workTask.integration.stalePlan: source {} head changed from {} to {}",
+                source.task_id, source.head, current_head
+            )));
+        }
+        let contained = crate::work_task::git::is_ancestor(repo_path, &source.head, landing_sha)
+            .await
+            .map_err(|e| DbError::Validation(e.to_string()))?;
         if !contained {
             return Err(DbError::Validation(format!(
                 "workTask.integration.notContained: {} is not in {landing_sha}",
@@ -817,8 +1108,89 @@ pub async fn assert_integration_landing(
     Ok(())
 }
 
-pub async fn folder_path_for_task(
-    conn: &DatabaseConnection,
+/// Settle captured source tasks only after [`assert_integration_landing`] has
+/// proved their exact heads are contained in the integration landing commit.
+/// The caller must invoke this with the same transaction used to settle the
+/// integration task, so a source CAS miss rolls the whole landing back.
+pub async fn settle_integration_sources<C: ConnectionTrait>(
+    conn: &C,
+    integration_task_id: i32,
+    landing_sha: &str,
+) -> Result<(), DbError> {
+    let task = work_task::Entity::find_by_id(integration_task_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {integration_task_id}")))?;
+    let cfg = serde_json::from_str::<WorkTaskConfig>(&task.config).unwrap_or_default();
+    let Some(snapshot) = cfg.integration_snapshot else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    for source in snapshot.sources {
+        let updated = work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::Status,
+                sea_orm::sea_query::Expr::value(crate::db::service::work_task_service::status_str(
+                    work_task::WorkTaskStatus::Done,
+                )),
+            )
+            .col_expr(
+                work_task::Column::MergeCommit,
+                sea_orm::sea_query::Expr::value(Some(landing_sha.to_string())),
+            )
+            .col_expr(
+                work_task::Column::FinishedAt,
+                sea_orm::sea_query::Expr::value(Some(now)),
+            )
+            .col_expr(
+                work_task::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(work_task::Column::Id.eq(source.task_id))
+            .filter(work_task::Column::Status.eq(work_task::WorkTaskStatus::Review))
+            .filter(work_task::Column::RunSeq.eq(source.run_seq))
+            .filter(work_task::Column::DeletedAt.is_null())
+            .exec(conn)
+            .await?;
+        if updated.rows_affected != 1 {
+            return Err(DbError::Validation(format!(
+                "workTask.integration.stalePlan: source {} could not be settled",
+                source.task_id
+            )));
+        }
+        crate::db::service::work_task_service::record_event(
+            conn,
+            source.task_id,
+            "status_changed",
+            "engine",
+            Some(serde_json::json!({
+                "from": "review",
+                "to": "done",
+                "merge_commit": landing_sha,
+                "integrated_by": integration_task_id,
+            })),
+        )
+        .await?;
+        crate::db::service::work_task_service::record_event(
+            conn,
+            source.task_id,
+            "integrated_by",
+            "engine",
+            Some(serde_json::json!({
+                "integration_task_id": integration_task_id,
+                "source_run_seq": source.run_seq,
+                "source_head": source.head,
+                "merge_commit": landing_sha,
+            })),
+        )
+        .await?;
+        update_run_state(conn, source.task_id, source.run_seq, "done", None, true).await?;
+    }
+    Ok(())
+}
+
+pub async fn folder_path_for_task<C: ConnectionTrait>(
+    conn: &C,
     task_id: i32,
 ) -> Result<Option<String>, DbError> {
     let Some(task) = work_task::Entity::find_by_id(task_id).one(conn).await? else {

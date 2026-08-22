@@ -15,6 +15,9 @@ pub struct Model {
     pub risks: String,
     #[sea_orm(column_type = "Text")]
     pub open_questions: String,
+    pub actor: String,
+    pub source_branch: Option<String>,
+    pub source_head: Option<String>,
     pub created_at: DateTimeUtc,
 }
 

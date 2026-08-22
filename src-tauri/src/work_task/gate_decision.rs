@@ -145,7 +145,10 @@ pub fn evaluate(
     // Index attempts by gate_id, newest first (id desc within run_seq desc).
     let mut by_gate: HashMap<&str, Vec<&GateAttemptInput>> = HashMap::new();
     for attempt in attempts {
-        by_gate.entry(attempt.gate_id.as_str()).or_default().push(attempt);
+        by_gate
+            .entry(attempt.gate_id.as_str())
+            .or_default()
+            .push(attempt);
     }
     for list in by_gate.values_mut() {
         list.sort_by(|a, b| b.run_seq.cmp(&a.run_seq).then(b.id.cmp(&a.id)));
@@ -196,9 +199,7 @@ fn evaluate_gate(
 ) -> (GateDecisionItem, bool) {
     let attempts = attempts.unwrap_or(&[]);
     // Newest attempt of this gate in the current run.
-    let current = attempts
-        .iter()
-        .find(|a| a.run_seq == current_run_seq);
+    let current = attempts.iter().find(|a| a.run_seq == current_run_seq);
 
     match current {
         Some(attempt) => {
@@ -206,7 +207,10 @@ fn evaluate_gate(
                 gate_id: gate.id.clone(),
                 gate_type: gate.gate_type,
                 status: Some(attempt.status),
-                reason: attempt.reason.clone().unwrap_or_else(|| attempt_status_text(attempt.status)),
+                reason: attempt
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| attempt_status_text(attempt.status)),
             };
             let ok = match attempt.status {
                 WorkTaskGateStatus::Passed => {
@@ -257,8 +261,7 @@ fn evaluate_gate(
                                 "spec changed since the reusable result; rebind required"
                                     .to_string()
                             } else {
-                                "reusable preflight no longer applicable (HEAD changed)"
-                                    .to_string()
+                                "reusable preflight no longer applicable (HEAD changed)".to_string()
                             },
                         },
                         false,
@@ -299,7 +302,13 @@ fn reusable_applicable(attempt: &GateAttemptInput, current_head: Option<&str>) -
 mod tests {
     use super::*;
 
-    fn req(id: &str, gate_type: WorkTaskGateType, required: bool, reusable: bool, allow_waiver: bool) -> GateRequirement {
+    fn req(
+        id: &str,
+        gate_type: WorkTaskGateType,
+        required: bool,
+        reusable: bool,
+        allow_waiver: bool,
+    ) -> GateRequirement {
         GateRequirement {
             id: id.to_string(),
             gate_type,
@@ -342,19 +351,33 @@ mod tests {
                 req("g", WorkTaskGateType::Preflight, true, false, false),
             ],
         };
-        assert!(validate_gate_policy(&dup).unwrap_err().contains("duplicate"));
+        assert!(validate_gate_policy(&dup)
+            .unwrap_err()
+            .contains("duplicate"));
 
         let reusable_human = WorkTaskGatePolicy {
             gates: vec![req("h", WorkTaskGateType::HumanApproval, true, true, false)],
         };
-        assert!(validate_gate_policy(&reusable_human).unwrap_err().contains("cannot be reusable"));
+        assert!(validate_gate_policy(&reusable_human)
+            .unwrap_err()
+            .contains("cannot be reusable"));
 
         let too_many = WorkTaskGatePolicy {
             gates: (0..=MAX_GATE_COUNT as i32)
-                .map(|i| req(&format!("g{i}"), WorkTaskGateType::Preflight, true, false, false))
+                .map(|i| {
+                    req(
+                        &format!("g{i}"),
+                        WorkTaskGateType::Preflight,
+                        true,
+                        false,
+                        false,
+                    )
+                })
                 .collect(),
         };
-        assert!(validate_gate_policy(&too_many).unwrap_err().contains("exceeds"));
+        assert!(validate_gate_policy(&too_many)
+            .unwrap_err()
+            .contains("exceeds"));
     }
 
     #[test]
@@ -373,13 +396,21 @@ mod tests {
                 text: "x".into(),
             })
             .collect::<Vec<_>>();
-        assert!(validate_acceptance_criteria_snapshot(&many).unwrap_err().contains("exceed"));
+        assert!(validate_acceptance_criteria_snapshot(&many)
+            .unwrap_err()
+            .contains("exceed"));
     }
 
     #[test]
     fn missing_required_attempt_is_unmet() {
         let policy = WorkTaskGatePolicy {
-            gates: vec![req("preflight", WorkTaskGateType::Preflight, true, false, false)],
+            gates: vec![req(
+                "preflight",
+                WorkTaskGateType::Preflight,
+                true,
+                false,
+                false,
+            )],
         };
         let d = evaluate(&policy, &[], 3, false, None);
         assert!(!d.eligible);
@@ -390,7 +421,13 @@ mod tests {
     #[test]
     fn passed_current_run_is_eligible() {
         let policy = WorkTaskGatePolicy {
-            gates: vec![req("preflight", WorkTaskGateType::Preflight, true, false, false)],
+            gates: vec![req(
+                "preflight",
+                WorkTaskGateType::Preflight,
+                true,
+                false,
+                false,
+            )],
         };
         let a = attempt(1, 3, "preflight", WorkTaskGateStatus::Passed, false);
         let d = evaluate(&policy, &[a], 3, false, None);
@@ -484,7 +521,13 @@ mod tests {
         assert!(d.unmet.is_empty());
 
         let forbidden = WorkTaskGatePolicy {
-            gates: vec![req("h", WorkTaskGateType::HumanApproval, true, false, false)],
+            gates: vec![req(
+                "h",
+                WorkTaskGateType::HumanApproval,
+                true,
+                false,
+                false,
+            )],
         };
         let d = evaluate(&forbidden, &[waived_attempt], 3, false, None);
         assert!(!d.eligible, "waiver without policy allowance is unmet");

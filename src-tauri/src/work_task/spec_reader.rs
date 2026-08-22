@@ -51,10 +51,7 @@ fn invalid(message: impl Into<String>) -> AppCommandError {
 /// Resolve `rel_path` inside `project_root` and return the canonical absolute
 /// path. Rejects absolute paths, lexical parent traversal, and any resolution
 /// (including through a symlink) that lands outside `project_root`.
-pub fn resolve_in_project(
-    project_root: &Path,
-    rel_path: &str,
-) -> Result<PathBuf, AppCommandError> {
+pub fn resolve_in_project(project_root: &Path, rel_path: &str) -> Result<PathBuf, AppCommandError> {
     let rel = Path::new(rel_path);
     if rel.is_absolute() {
         return Err(invalid("spec path must be repository-relative"));
@@ -67,13 +64,11 @@ pub fn resolve_in_project(
             _ => {}
         }
     }
-    let canonical_root = std::fs::canonicalize(project_root).map_err(|e| {
-        invalid("project root is not readable").with_detail(e.to_string())
-    })?;
+    let canonical_root = std::fs::canonicalize(project_root)
+        .map_err(|e| invalid("project root is not readable").with_detail(e.to_string()))?;
     let candidate = project_root.join(rel_path);
-    let canonical_target = std::fs::canonicalize(&candidate).map_err(|e| {
-        invalid("spec file is missing or not readable").with_detail(e.to_string())
-    })?;
+    let canonical_target = std::fs::canonicalize(&candidate)
+        .map_err(|e| invalid("spec file is missing or not readable").with_detail(e.to_string()))?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(invalid("spec path escapes project root"));
     }
@@ -87,14 +82,11 @@ pub fn read_spec_reference(
     rel_path: &str,
 ) -> Result<SpecReference, AppCommandError> {
     let resolved = resolve_in_project(project_root, rel_path)?;
-    let bytes = std::fs::read(&resolved).map_err(|e| {
-        invalid("spec file is not readable").with_detail(e.to_string())
-    })?;
+    let bytes = std::fs::read(&resolved)
+        .map_err(|e| invalid("spec file is not readable").with_detail(e.to_string()))?;
     if bytes.len() > MAX_SPEC_BYTES {
-        return Err(invalid("spec file exceeds 1 MiB").with_detail(format!(
-            "size={}, limit={MAX_SPEC_BYTES}",
-            bytes.len()
-        )));
+        return Err(invalid("spec file exceeds 1 MiB")
+            .with_detail(format!("size={}, limit={MAX_SPEC_BYTES}", bytes.len())));
     }
     parse_spec_body(rel_path, &bytes)
 }
@@ -170,9 +162,8 @@ fn scalar_to_string(v: &serde_yaml::Value) -> Option<String> {
 /// non-scalar values are rejected (`T06`).
 fn parse_frontmatter(text: &str) -> Result<(String, String), AppCommandError> {
     let block = extract_frontmatter(text).ok_or_else(|| invalid("spec has no front matter"))?;
-    let fm: Frontmatter = serde_yaml::from_str(block).map_err(|e| {
-        invalid("spec front matter is malformed").with_detail(e.to_string())
-    })?;
+    let fm: Frontmatter = serde_yaml::from_str(block)
+        .map_err(|e| invalid("spec front matter is malformed").with_detail(e.to_string()))?;
     let id = fm
         .id
         .ok_or_else(|| invalid("spec front matter missing id"))?;
@@ -184,8 +175,8 @@ fn parse_frontmatter(text: &str) -> Result<(String, String), AppCommandError> {
         .version
         .as_ref()
         .ok_or_else(|| invalid("spec front matter missing version"))?;
-    let version = scalar_to_string(version)
-        .ok_or_else(|| invalid("spec version must be a scalar"))?;
+    let version =
+        scalar_to_string(version).ok_or_else(|| invalid("spec version must be a scalar"))?;
     let version = version.trim().to_string();
     if version.is_empty() {
         return Err(invalid("spec front matter version is empty"));
@@ -211,7 +202,9 @@ fn parse_acceptance_criteria(text: &str) -> Vec<AcceptanceCriterionSnapshot> {
             break;
         }
     }
-    let Some(start) = start else { return Vec::new() };
+    let Some(start) = start else {
+        return Vec::new();
+    };
 
     let mut out = Vec::new();
     for line in &lines[start..] {

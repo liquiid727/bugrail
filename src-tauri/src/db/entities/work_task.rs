@@ -43,6 +43,19 @@ pub enum WorkTaskStatus {
     Canceled,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Default, Serialize, Deserialize,
+)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskKind {
+    #[default]
+    #[sea_orm(string_value = "implementation")]
+    Implementation,
+    #[sea_orm(string_value = "integration")]
+    Integration,
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "work_task")]
 pub struct Model {
@@ -52,6 +65,7 @@ pub struct Model {
     /// query joins the live folder.
     pub folder_id: i32,
     pub title: String,
+    pub task_kind: WorkTaskKind,
     /// JSON `WorkTaskConfig` — per-task overrides; empty fields inherit the
     /// folder's `work_task_settings`.
     #[sea_orm(column_type = "Text")]

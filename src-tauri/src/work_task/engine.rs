@@ -39,7 +39,9 @@ use crate::commands::folders::{
 use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::entities::{folder, folder_command};
-use crate::db::service::{conversation_service, tab_service, work_task_service};
+use crate::db::service::{
+    conversation_service, specos_runtime_service, tab_service, work_task_service,
+};
 use crate::db::AppDatabase;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
@@ -2189,6 +2191,44 @@ impl TaskEngine {
         }
     }
 
+    pub async fn record_complete_with_handoff(
+        &self,
+        conn_id: &str,
+        verdict: &str,
+        summary: Option<&str>,
+        handoff: Option<crate::models::WorkTaskHandoffDraft>,
+    ) -> TaskReportAck {
+        let entry = { self.index.lock().await.get(conn_id).copied() };
+        let Some((task_id, run_seq)) = entry else {
+            return TaskReportAck::rejected("this session is not executing a work task");
+        };
+        let result = match handoff {
+            Some(draft) => {
+                work_task_service::set_verdict_with_handoff(
+                    &self.db.conn,
+                    task_id,
+                    run_seq,
+                    verdict,
+                    summary,
+                    draft,
+                )
+                .await
+            }
+            None => {
+                work_task_service::set_verdict(&self.db.conn, task_id, run_seq, verdict, summary)
+                    .await
+            }
+        };
+        match result {
+            Ok(true) => {
+                self.emit_upsert(task_id);
+                TaskReportAck::recorded()
+            }
+            Ok(false) => TaskReportAck::rejected("the task is not running anymore"),
+            Err(e) => TaskReportAck::rejected(&format!("could not record verdict: {e}")),
+        }
+    }
+
     // ── preflight (acceptance red/green light) ──────────────────────────────
 
     /// After a settle into review: run the folder's preflight command (if one
@@ -2418,6 +2458,12 @@ impl TaskEngine {
             .map_err(|e| e.to_string())?;
         if task.status != WorkTaskStatus::Review {
             return Err("task is not in review".to_string());
+        }
+        if specos_runtime_service::integration_source_is_reserved(&self.db.conn, task_id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Err("source task is reserved by an integration task".to_string());
         }
 
         // Held across the check → CAS → removal. Uncontended in the common
@@ -2660,6 +2706,19 @@ impl TaskEngine {
         // time, with the base state validated right before the CAS.
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
+
+        if task.task_kind == crate::db::entities::work_task::WorkTaskKind::Integration {
+            let integration_plan =
+                specos_runtime_service::integration_plan(&self.db.conn, task_id, Some(&root.path))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if integration_plan.status != "eligible" {
+                return Err(format!(
+                    "integration plan is not eligible: {}",
+                    integration_plan.status
+                ));
+            }
+        }
 
         let another_merging =
             work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Merging])
@@ -3174,6 +3233,12 @@ impl TaskEngine {
                 .collect();
         candidates.sort_by_key(|t| (t.settled_at, t.id));
         for task in candidates {
+            if specos_runtime_service::integration_source_is_reserved(&self.db.conn, task.id)
+                .await
+                .unwrap_or(true)
+            {
+                continue;
+            }
             // A gone worktree cannot serve a merge generation; that task's
             // acceptance is the "complete" button — a user decision.
             if self.live_worktree(&task).await.is_none() {
@@ -3301,6 +3366,12 @@ impl TaskEngine {
                 | WorkTaskStatus::Merging
         ) {
             return Err("cancel or finish the task before removing its worktree".to_string());
+        }
+        if specos_runtime_service::integration_source_is_reserved(&self.db.conn, task_id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Err("source task is reserved by an integration task".to_string());
         }
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
@@ -3941,9 +4012,52 @@ async fn compose_prompt(
                          summarizing what this task changed."
                     .to_string(),
             };
+            let source_instructions = if task.task_kind
+                != crate::db::entities::work_task::WorkTaskKind::Integration
+            {
+                String::new()
+            } else {
+                let integration_sources =
+                    specos_runtime_service::integration_plan(conn, task.id, Some(root_path))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                if integration_sources.sources.is_empty() {
+                    String::new()
+                } else {
+                    let mut refs = Vec::new();
+                    for source in integration_sources.sources {
+                        let head = source.captured_head.ok_or_else(|| {
+                            format!(
+                                "integration source {} has no captured Git head",
+                                source.task_id
+                            )
+                        })?;
+                        let handoff = crate::db::service::specos_runtime_service::get_handoff(
+                            conn,
+                            source.task_id,
+                            source.captured_run_seq,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        let summary = handoff
+                            .map(|h| first_chars(&h.summary, 2000))
+                            .unwrap_or_else(|| "(no handoff)".to_string());
+                        refs.push(format!(
+                            "{}. task {}: branch `{}` at `{head}`; handoff: {summary}",
+                            source.merge_order + 1,
+                            source.task_id,
+                            source.branch.unwrap_or_else(|| "<missing>".to_string()),
+                        ));
+                    }
+                    format!(
+                    "This is an integration WorkTask. The following source refs are a frozen, \n                    Git-truth snapshot. In this task worktree, merge each local source branch \n                    in the listed order, resolve conflicts while preserving every source, and \n                    verify each captured head is an ancestor of the integration HEAD before \n                    landing:\n{}\n",
+                    refs.join("\n")
+                )
+                }
+            };
             blocks.push(PromptInputBlock::Text {
                 text: format!(
-                    "The user accepted this task — land it onto the base branch \
+                    "{source_instructions}The user accepted this task — land it onto the base branch \
                      `{base_branch}` now, doing all git operations yourself:\n\
                      1. Commit any uncommitted changes in this worktree to the current \
                      branch (`{work_branch}`).\n\
@@ -4570,6 +4684,21 @@ impl WorkTaskToolAccess for EngineWorkTaskTools {
             .record_complete(parent_connection_id, verdict, summary)
             .await
     }
+
+    async fn complete_with_handoff(
+        &self,
+        parent_connection_id: &str,
+        verdict: &str,
+        summary: Option<&str>,
+        handoff: Option<crate::models::WorkTaskHandoffDraft>,
+    ) -> TaskReportAck {
+        let Some(engine) = engine() else {
+            return TaskReportAck::rejected("no task engine running in this process");
+        };
+        engine
+            .record_complete_with_handoff(parent_connection_id, verdict, summary, handoff)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -4902,6 +5031,7 @@ mod tests {
             id: 7,
             folder_id: 1,
             title: "Fix the login flow".to_string(),
+            task_kind: crate::db::entities::work_task::WorkTaskKind::Implementation,
             config: "{}".to_string(),
             status: WorkTaskStatus::Queued,
             failure_reason: None,
@@ -5682,6 +5812,7 @@ mod tests {
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
                 }),
+                task_kind: Default::default(),
             },
         )
         .await
@@ -5750,6 +5881,7 @@ mod tests {
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
                 }),
+                task_kind: Default::default(),
             },
         )
         .await
@@ -5812,6 +5944,7 @@ mod tests {
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
                 }),
+                task_kind: Default::default(),
             },
         )
         .await

@@ -307,6 +307,7 @@ pub struct WorkTaskHandoffDraft {
 pub struct WorkTaskHandoffInfo {
     pub task_id: i32,
     pub run_seq: i32,
+    pub actor: String,
     pub summary: String,
     pub artifacts: Vec<String>,
     pub risks: Vec<String>,
@@ -344,6 +345,11 @@ pub struct IntegrationSourceInfo {
     pub captured_head: Option<String>,
     pub captured_run_seq: Option<i32>,
     pub has_handoff: bool,
+    pub handoff_trusted: bool,
+    pub git_branch_exists: bool,
+    pub spec_current: bool,
+    pub gates_eligible: bool,
+    pub eligibility_reason: Option<String>,
     pub merge_order: i32,
     pub stale: bool,
 }

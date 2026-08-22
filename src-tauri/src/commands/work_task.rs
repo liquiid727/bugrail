@@ -19,9 +19,7 @@ use crate::models::{
     WorkTaskGateStatus, WorkTaskGateType, WorkTaskInfo, WorkTaskTemplateDraft,
     WorkTaskTemplateInfo,
 };
-use crate::web::event_bridge::{
-    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
-};
+use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
 use crate::work_task::{gate_decision, spec_reader};
 use sea_orm::ActiveValue::{NotSet, Set};
 use sea_orm::TransactionTrait;
@@ -486,7 +484,11 @@ pub async fn work_task_schedule_core(
     id: i32,
     scheduled_at: Option<String>,
 ) -> Result<(), DbError> {
-    let at = match scheduled_at.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let at = match scheduled_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(raw) => Some(
             chrono::DateTime::parse_from_rfc3339(raw)
                 .map_err(|e| DbError::Validation(format!("invalid scheduled_at: {e}")))?
@@ -642,7 +644,9 @@ async fn task_worktree_head(
     let Some(wt_id) = task.worktree_folder_id else {
         return Ok(None);
     };
-    let wt = get_folder_core(db, wt_id).await.map_err(AppCommandError::from)?;
+    let wt = get_folder_core(db, wt_id)
+        .await
+        .map_err(AppCommandError::from)?;
     match crate::work_task::git::rev_parse(&wt.path, "HEAD").await {
         Ok(sha) => Ok(Some(sha)),
         Err(_) => Ok(None),
@@ -671,7 +675,11 @@ async fn enforce_gate_eligibility(
         return Ok(());
     }
     record_gate_blocked_event(db, task_id, &decision).await;
-    emit_event(emitter, WORK_TASK_CHANGED_EVENT, WorkTaskChange::Upsert { id: task_id });
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id: task_id },
+    );
     Err(gate_block_error(task_id, &decision))
 }
 
@@ -721,8 +729,14 @@ async fn record_gate_blocked_event(
             "reason": g.reason,
         })).collect::<Vec<_>>(),
     });
-    let _ = work_task_service::record_event(&db.conn, task_id, "quality_gate_blocked", "user", Some(payload))
-        .await;
+    let _ = work_task_service::record_event(
+        &db.conn,
+        task_id,
+        "quality_gate_blocked",
+        "user",
+        Some(payload),
+    )
+    .await;
 }
 
 /// List persisted gate attempts for a task, optionally scoped to one run.
@@ -774,9 +788,8 @@ pub async fn work_task_gate_human_decide_core(
         .ok_or_else(|| {
             AppCommandError::invalid_input(format!("task {task_id} has no spec contract"))
         })?;
-    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy).map_err(|e| {
-        AppCommandError::invalid_input(format!("stored gate policy invalid: {e}"))
-    })?;
+    let policy: WorkTaskGatePolicy = serde_json::from_str(&contract.gate_policy)
+        .map_err(|e| AppCommandError::invalid_input(format!("stored gate policy invalid: {e}")))?;
     let gate = policy
         .gates
         .iter()
@@ -785,7 +798,9 @@ pub async fn work_task_gate_human_decide_core(
             AppCommandError::invalid_input(format!("gate {gate_id} is not in the task's policy"))
         })?;
 
-    let reason = reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+    let reason = reason
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
     let (status, is_waiver) = match decision.as_str() {
         "approve" => {
             if gate.gate_type != WorkTaskGateType::HumanApproval {
@@ -812,10 +827,10 @@ pub async fn work_task_gate_human_decide_core(
     };
     let Some(reason) = reason else {
         if is_waiver {
-            return Err(AppCommandError::permission_denied(
-                "a waiver requires a non-empty reason",
-            )
-            .with_i18n(QUALITY_GATE_INVALID_WAIVER_I18N, BTreeMap::new()));
+            return Err(
+                AppCommandError::permission_denied("a waiver requires a non-empty reason")
+                    .with_i18n(QUALITY_GATE_INVALID_WAIVER_I18N, BTreeMap::new()),
+            );
         }
         return Err(AppCommandError::invalid_input(
             "a gate decision requires a non-empty reason",
@@ -867,7 +882,11 @@ pub async fn work_task_gate_human_decide_core(
         .await
         .map_err(|e| AppCommandError::from(DbError::from(e)))?;
 
-    emit_event(emitter, WORK_TASK_CHANGED_EVENT, WorkTaskChange::Upsert { id: task_id });
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id: task_id },
+    );
     work_task_service::gate_result_info(row).map_err(AppCommandError::from)
 }
 
@@ -895,7 +914,10 @@ pub async fn work_task_archive_core(
 }
 
 pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
-    engine()?.cleanup_task(id).await.map_err(DbError::Validation)
+    engine()?
+        .cleanup_task(id)
+        .await
+        .map_err(DbError::Validation)
 }
 
 /// Diff of the task worktree vs. its recorded base (`base_sha`, so the view is
@@ -1047,9 +1069,9 @@ pub async fn work_task_contract_bind_core(
         .collect();
     let mut selected = Vec::with_capacity(draft.selected_acceptance_criteria_ids.len());
     for id in &draft.selected_acceptance_criteria_ids {
-        let ac = by_id.get(id.as_str()).ok_or_else(|| {
-            spec_invalid(format!("unknown acceptance criterion: {id}"))
-        })?;
+        let ac = by_id
+            .get(id.as_str())
+            .ok_or_else(|| spec_invalid(format!("unknown acceptance criterion: {id}")))?;
         selected.push((*ac).clone());
     }
 
@@ -1071,7 +1093,8 @@ pub async fn work_task_contract_bind_core(
         source_spec_path: Set(spec.path.clone()),
         source_spec_hash: Set(spec.sha256.clone()),
         acceptance_criteria: Set(serde_json::to_string(&selected).map_err(|e| {
-            AppCommandError::invalid_input("serialize acceptance criteria").with_detail(e.to_string())
+            AppCommandError::invalid_input("serialize acceptance criteria")
+                .with_detail(e.to_string())
         })?),
         gate_policy: Set(serde_json::to_string(&draft.gate_policy).map_err(|e| {
             AppCommandError::invalid_input("serialize gate policy").with_detail(e.to_string())
@@ -1133,7 +1156,11 @@ pub async fn work_task_spec_staleness_core(
         return Ok(false);
     };
     let project_root = task_project_root(db, task_id).await?;
-    spec_reader::spec_stale(&project_root, &contract.source_spec_path, &contract.source_spec_hash)
+    spec_reader::spec_stale(
+        &project_root,
+        &contract.source_spec_path,
+        &contract.source_spec_hash,
+    )
 }
 
 pub async fn work_task_settings_get_core(
@@ -1248,9 +1275,7 @@ pub async fn work_task_events(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn work_task_attention_count(
-    db: tauri::State<'_, AppDatabase>,
-) -> Result<u64, DbError> {
+pub async fn work_task_attention_count(db: tauri::State<'_, AppDatabase>) -> Result<u64, DbError> {
     work_task_attention_count_core(&db).await
 }
 
@@ -1448,7 +1473,7 @@ pub async fn work_task_gate_human_decide(
         task_id,
         gate_id,
         decision,
-    reason,
+        reason,
     )
     .await
 }
@@ -1609,6 +1634,7 @@ mod tests {
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
                 "agent_type": agent,
             }),
+            task_kind: Default::default(),
         }
     }
 
@@ -1665,15 +1691,24 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert!(work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
-            .await
-            .unwrap());
         assert!(
-            work_task_service::mark_running(&db.conn, overridden.id, run_seq, conversation_id, "c1")
+            work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
                 .await
                 .unwrap()
         );
-        assert_eq!(agent_of(&db, overridden.id).await.as_deref(), Some("gemini"));
+        assert!(work_task_service::mark_running(
+            &db.conn,
+            overridden.id,
+            run_seq,
+            conversation_id,
+            "c1"
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            agent_of(&db, overridden.id).await.as_deref(),
+            Some("gemini")
+        );
 
         // A list stamps every row the same way a get does.
         let listed = work_task_list_core(&db, Some(folder_id)).await.unwrap();
