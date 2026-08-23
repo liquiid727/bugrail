@@ -734,7 +734,7 @@ pub async fn overview(
         .map(activity_info)
         .collect();
     Ok(ContextOverview {
-        config,
+        config: plugins::redact_context_config(&config),
         provider_health,
         packages,
         activity,
@@ -878,11 +878,11 @@ pub async fn check_provider_health(
                 message: Some(format!("health endpoint returned {}", response.status())),
                 checked_at,
             }),
-            Err(error) => out.push(ContextProviderHealth {
+            Err(_error) => out.push(ContextProviderHealth {
                 id: provider.id.clone(),
                 kind: provider.kind.clone(),
                 status: "degraded".into(),
-                message: Some(error.to_string()),
+                message: Some("health check failed".into()),
                 checked_at,
             }),
         }

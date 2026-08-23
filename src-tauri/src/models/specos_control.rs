@@ -442,6 +442,67 @@ pub struct ContextOverview {
     pub activity: Vec<ContextActivityInfo>,
 }
 
+/// Safe configuration projection for the Context plugin operations surface.
+/// It deliberately reports only whether a credential environment reference
+/// exists; the environment variable name and its value are not transport data.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPluginConfigInfo {
+    pub id: String,
+    pub kind: String,
+    pub adapter: Option<String>,
+    pub enabled: bool,
+    pub required: bool,
+    pub capabilities: Vec<String>,
+    pub endpoint: Option<String>,
+    pub secret_env_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderJobAttemptInfo {
+    pub attempt_no: i32,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+/// Client-safe durable provider-job projection. Request and lease secrets are
+/// intentionally absent; the two digest fields are stable facts, not payloads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderJobInfo {
+    pub id: i32,
+    pub provider_kind: String,
+    pub provider_id: String,
+    pub operation: String,
+    pub idempotency_key_hash: String,
+    pub request_hash: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub next_run_at: DateTime<Utc>,
+    pub last_error_code: Option<String>,
+    pub last_error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub attempts: Vec<ProviderJobAttemptInfo>,
+}
+
+/// Persisted configuration plus reconstructed health/job facts. Events may
+/// refresh this view, but are never its source of truth.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPluginOperations {
+    pub config: Vec<ContextPluginConfigInfo>,
+    pub validation_errors: Vec<String>,
+    pub health: Vec<ContextProviderHealth>,
+    pub jobs: Vec<ProviderJobInfo>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextProviderHealth {

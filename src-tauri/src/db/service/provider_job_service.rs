@@ -37,6 +37,7 @@ const MAX_LEASE_SECONDS: i64 = 60 * 60;
 const MAX_COMPONENT_LENGTH: usize = 128;
 const MAX_ERROR_CODE_LENGTH: usize = 64;
 const MAX_ERROR_MESSAGE_LENGTH: usize = 500;
+const MAX_LIST_LIMIT: u64 = 100;
 
 #[derive(Debug, Error)]
 pub enum ProviderJobError {
@@ -290,6 +291,28 @@ pub async fn get(
     id: i32,
 ) -> Result<Option<provider_job::Model>, ProviderJobError> {
     Ok(provider_job::Entity::find_by_id(id).one(conn).await?)
+}
+
+/// List durable job facts for operator projections. Filtering is deliberately
+/// limited to provider identity; request bodies and lease material are never
+/// selected into a client-facing projection.
+pub async fn list(
+    conn: &DatabaseConnection,
+    provider_kind: Option<&str>,
+    provider_id: Option<&str>,
+    limit: u64,
+) -> Result<Vec<provider_job::Model>, ProviderJobError> {
+    let mut query = provider_job::Entity::find()
+        .order_by_desc(provider_job::Column::UpdatedAt)
+        .order_by_desc(provider_job::Column::Id)
+        .limit(limit.clamp(1, MAX_LIST_LIMIT));
+    if let Some(kind) = provider_kind {
+        query = query.filter(provider_job::Column::ProviderKind.eq(kind));
+    }
+    if let Some(id) = provider_id {
+        query = query.filter(provider_job::Column::ProviderId.eq(id));
+    }
+    Ok(query.all(conn).await?)
 }
 
 /// Reconcile expired leases after startup or before a worker claims work.

@@ -22,6 +22,7 @@ import {
   codeIntelligenceSetBinaryOverride,
   codeIntelligenceSetEnabled,
   specosContextConfigSave,
+  specosContextPluginOperationsGet,
   specosContextOverview,
   specosMemoryDeliveryList,
   specosMemoryDeliveryRetry,
@@ -34,6 +35,7 @@ import type {
   CodeIntelState,
   ContextLoadout,
   ContextOverview,
+  ContextPluginOperations,
   ContextProviderConfig,
   MemoryDeliveryInfo,
   MemoryProviderTestResult,
@@ -64,6 +66,9 @@ export function ContextPage() {
   const t = useTranslations("ContextSystem")
   const { activeFolderId } = useActiveFolder()
   const [data, setData] = useState<ContextOverview | null>(null)
+  const [operations, setOperations] = useState<ContextPluginOperations | null>(
+    null
+  )
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -82,7 +87,12 @@ export function ContextPage() {
         setLoading(true)
       }
       try {
-        setData(await specosContextOverview(activeFolderId))
+        const [nextData, nextOperations] = await Promise.all([
+          specosContextOverview(activeFolderId),
+          specosContextPluginOperationsGet(activeFolderId),
+        ])
+        setData(nextData)
+        setOperations(nextOperations)
         setError(null)
       } catch (cause) {
         setError(toErrorMessage(cause))
@@ -201,6 +211,7 @@ export function ContextPage() {
           <TabsTrigger value="providers">{t("providers")}</TabsTrigger>
           <TabsTrigger value="loadouts">{t("loadouts")}</TabsTrigger>
           <TabsTrigger value="activity">{t("activity")}</TabsTrigger>
+          <TabsTrigger value="operations">{t("operations")}</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="min-h-0 overflow-auto pt-3">
           <div className="grid gap-4 md:grid-cols-3">
@@ -479,6 +490,118 @@ export function ContextPage() {
                 </li>
               ))}
             </ol>
+          )}
+        </TabsContent>
+        <TabsContent
+          value="operations"
+          className="min-h-0 overflow-auto space-y-3 pt-3"
+        >
+          {!operations ? (
+            <Empty title={t("noActivity")} body={t("noActivityHint")} compact />
+          ) : (
+            <>
+              <div className="grid gap-4 md:grid-cols-3">
+                <Metric
+                  label={t("providers")}
+                  value={operations.config.length}
+                />
+                <Metric
+                  label={t("activity")}
+                  value={operations.health.length}
+                />
+                <Metric label={t("packages")} value={operations.jobs.length} />
+              </div>
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle>{t("providers")}</CardTitle>
+                  <CardDescription>{t("subtitle")}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {operations.health.length === 0 ? (
+                    <Empty
+                      title={t("noProviders")}
+                      body={t("noProvidersHint")}
+                      compact
+                    />
+                  ) : (
+                    operations.health.map((health) => {
+                      const config = operations.config.find(
+                        (item) => item.id === health.id
+                      )
+                      return (
+                        <div
+                          key={`${health.kind}:${health.id}`}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 text-sm"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium">{health.id}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {health.kind} · {config?.capabilities.join(", ")}
+                            </div>
+                          </div>
+                          <Badge
+                            variant={
+                              health.status === "healthy"
+                                ? "secondary"
+                                : health.status === "disabled"
+                                  ? "outline"
+                                  : "destructive"
+                            }
+                          >
+                            {health.status}
+                          </Badge>
+                        </div>
+                      )
+                    })
+                  )}
+                </CardContent>
+              </Card>
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle>{t("activity")}</CardTitle>
+                  <CardDescription>{t("noActivityHint")}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {operations.jobs.length === 0 ? (
+                    <Empty
+                      title={t("noActivity")}
+                      body={t("noActivityHint")}
+                      compact
+                    />
+                  ) : (
+                    <ol className="space-y-2">
+                      {operations.jobs.map((job) => (
+                        <li
+                          key={job.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 text-sm"
+                        >
+                          <div>
+                            <div className="font-medium">
+                              {job.providerId} · {job.operation}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {job.attemptCount}/{job.maxAttempts} ·{" "}
+                              {job.idempotencyKeyHash.slice(0, 12)}
+                            </div>
+                          </div>
+                          <Badge
+                            variant={
+                              job.status === "succeeded"
+                                ? "secondary"
+                                : job.status === "failed"
+                                  ? "destructive"
+                                  : "outline"
+                            }
+                          >
+                            {job.status}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
         </TabsContent>
       </Tabs>

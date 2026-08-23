@@ -1384,6 +1384,10 @@ pub fn build_router(
             post(handlers::specos_control::context_overview),
         )
         .route(
+            "/specos_context_plugin_operations_get",
+            post(handlers::specos_control::context_plugin_operations),
+        )
+        .route(
             "/specos_context_package_get",
             post(handlers::specos_control::context_package_get),
         )

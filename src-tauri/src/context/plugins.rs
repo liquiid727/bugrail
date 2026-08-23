@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::ContextProviderConfig;
+use crate::models::{ContextConfig, ContextProviderConfig};
 
 pub const ADAPTER_DETERMINISTIC_MEMORY: &str = "deterministic-memory";
 pub const ADAPTER_DETERMINISTIC_WIKI: &str = "deterministic-wiki";
@@ -190,6 +190,112 @@ impl PluginManifest {
             secret_env: provider.secret_env.clone(),
         })
     }
+}
+
+/// Return a renderer-safe copy of persisted Context configuration. The file
+/// remains the authoritative editable source, but malformed endpoint values
+/// (including embedded credentials) must not be reflected into transport
+/// payloads or an operational UI snapshot.
+pub fn redact_context_config(config: &ContextConfig) -> ContextConfig {
+    let mut safe = config.clone();
+    safe.providers = config
+        .providers
+        .iter()
+        .map(redact_provider_config)
+        .collect();
+    safe.validation_errors = config
+        .validation_errors
+        .iter()
+        .map(|value| redact_diagnostic(value))
+        .collect();
+    safe
+}
+
+pub fn redact_provider_config(provider: &ContextProviderConfig) -> ContextProviderConfig {
+    let mut safe = provider.clone();
+    safe.id = safe_identifier(&provider.id, 128);
+    safe.kind = safe_identifier(&provider.kind, 64);
+    safe.adapter = provider
+        .adapter
+        .as_deref()
+        .map(|value| safe_identifier(value, 128));
+    safe.endpoint = provider.endpoint.as_deref().and_then(safe_endpoint);
+    safe.secret_env = provider.secret_env.as_deref().and_then(safe_env_name);
+    safe.service_id_env = provider.service_id_env.as_deref().and_then(safe_env_name);
+    safe.team_id = provider
+        .team_id
+        .as_deref()
+        .map(redact_diagnostic);
+    safe.user_id_env = provider.user_id_env.as_deref().and_then(safe_env_name);
+    safe.default_agent_id = provider
+        .default_agent_id
+        .as_deref()
+        .map(redact_diagnostic);
+    safe.agent_id_map = provider
+        .agent_id_map
+        .iter()
+        .map(|(key, value)| (redact_diagnostic(key), redact_diagnostic(value)))
+        .collect();
+    safe.capabilities = provider
+        .capabilities
+        .iter()
+        .map(|value| safe_identifier(value, 128))
+        .collect();
+    safe
+}
+
+/// Strip controls, cap untrusted diagnostics and replace values that look like
+/// runtime credentials with a stable generic message.
+pub fn redact_diagnostic(value: &str) -> String {
+    let sanitized: String = value.chars().filter(|ch| !ch.is_control()).take(256).collect();
+    let lower = sanitized.to_ascii_lowercase();
+    if [
+        "authorization",
+        "api_key",
+        "apikey",
+        "credential",
+        "password",
+        "secret",
+        "token",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        "provider diagnostic redacted".into()
+    } else {
+        sanitized
+    }
+}
+
+fn safe_identifier(value: &str, max: usize) -> String {
+    let sanitized: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        .take(max)
+        .collect();
+    if sanitized.is_empty() {
+        "<invalid>".into()
+    } else {
+        sanitized
+    }
+}
+
+fn safe_env_name(value: &str) -> Option<String> {
+    (valid_env_name(value) && value.len() <= 128).then(|| value.to_string())
+}
+
+fn safe_endpoint(value: &str) -> Option<String> {
+    let url = reqwest::Url::parse(value).ok()?;
+    if !(url.scheme() == "http" || url.scheme() == "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(url.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::error::DbError;
-use crate::db::service::{specos_runtime_service, work_task_service};
+use crate::db::service::{provider_job_service, specos_runtime_service, work_task_service};
 use crate::db::AppDatabase;
 use crate::models::*;
 use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
@@ -318,7 +318,8 @@ pub async fn context_config_get_core(
     folder_id: i32,
 ) -> Result<ContextConfig, DbError> {
     let root = crate::specos_control::project_root(&db.conn, folder_id).await?;
-    crate::specos_control::load_context(&root)
+    let config = crate::specos_control::load_context(&root)?;
+    Ok(crate::context::plugins::redact_context_config(&config))
 }
 
 pub async fn context_config_save_core(
@@ -327,7 +328,8 @@ pub async fn context_config_save_core(
     config: ContextConfig,
 ) -> Result<ContextConfig, DbError> {
     let root = crate::specos_control::project_root(&db.conn, folder_id).await?;
-    crate::specos_control::save_context(&root, config)
+    let saved = crate::specos_control::save_context(&root, config)?;
+    Ok(crate::context::plugins::redact_context_config(&saved))
 }
 
 pub async fn context_overview_core(
@@ -337,6 +339,128 @@ pub async fn context_overview_core(
 ) -> Result<ContextOverview, DbError> {
     let root = crate::specos_control::project_root(&db.conn, folder_id).await?;
     crate::context::overview(&db.conn, folder_id, &root, memory).await
+}
+
+fn provider_job_error(error: provider_job_service::ProviderJobError) -> DbError {
+    match error {
+        provider_job_service::ProviderJobError::Database(error) => DbError::Database(error),
+        provider_job_service::ProviderJobError::Validation(message) => DbError::Validation(message),
+        provider_job_service::ProviderJobError::IdempotencyConflict => {
+            DbError::Validation("provider job idempotency conflict".into())
+        }
+        provider_job_service::ProviderJobError::LeaseLost => {
+            DbError::Validation("provider job lease is no longer valid".into())
+        }
+        provider_job_service::ProviderJobError::NotFound => {
+            DbError::NotFound("provider job not found".into())
+        }
+    }
+}
+
+/// Reconstruct a safe operations projection from the persisted Context file
+/// and provider-job tables. The event stream is intentionally not consulted:
+/// a missed or reordered refresh event cannot erase durable state.
+pub async fn context_plugin_operations_core(
+    db: &AppDatabase,
+    memory: &crate::memory::MemoryService,
+    folder_id: i32,
+    provider_kind: Option<String>,
+    provider_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<ContextPluginOperations, DbError> {
+    let root = crate::specos_control::project_root(&db.conn, folder_id).await?;
+    let raw_config = crate::specos_control::load_context(&root)?;
+    let safe_config = crate::context::plugins::redact_context_config(&raw_config);
+    let health = crate::context::check_provider_health(&raw_config.providers, memory, folder_id)
+        .await
+        .into_iter()
+        .map(|item| ContextProviderHealth {
+            id: crate::context::plugins::redact_diagnostic(&item.id),
+            kind: crate::context::plugins::redact_diagnostic(&item.kind),
+            status: item.status,
+            message: item
+                .message
+                .as_deref()
+                .map(crate::context::plugins::redact_diagnostic),
+            checked_at: item.checked_at,
+        })
+        .collect();
+    let config = safe_config
+        .providers
+        .iter()
+        .map(|provider| ContextPluginConfigInfo {
+            id: provider.id.clone(),
+            kind: provider.kind.clone(),
+            adapter: provider.adapter.clone(),
+            enabled: provider.enabled,
+            required: provider.required,
+            capabilities: provider.capabilities.clone(),
+            endpoint: provider.endpoint.clone(),
+            secret_env_configured: provider.secret_env.is_some(),
+        })
+        .collect();
+
+    let rows = provider_job_service::list(
+        &db.conn,
+        provider_kind.as_deref(),
+        provider_id.as_deref(),
+        u64::from(limit.unwrap_or(50).clamp(1, 100)),
+    )
+    .await
+    .map_err(provider_job_error)?;
+    let mut jobs = Vec::with_capacity(rows.len());
+    for row in rows {
+        let attempts = provider_job_service::attempt_history(&db.conn, row.id, 5)
+            .await
+            .map_err(provider_job_error)?
+            .into_iter()
+            .map(|attempt| ProviderJobAttemptInfo {
+                attempt_no: attempt.attempt_no,
+                status: attempt.status,
+                started_at: attempt.started_at,
+                finished_at: attempt.finished_at,
+                error_code: attempt
+                    .error_code
+                    .as_deref()
+                    .map(crate::context::plugins::redact_diagnostic),
+                error_message: attempt
+                    .error_message
+                    .as_deref()
+                    .map(crate::context::plugins::redact_diagnostic),
+            })
+            .collect();
+        jobs.push(ProviderJobInfo {
+            id: row.id,
+            provider_kind: crate::context::plugins::redact_diagnostic(&row.provider_kind),
+            provider_id: crate::context::plugins::redact_diagnostic(&row.provider_id),
+            operation: crate::context::plugins::redact_diagnostic(&row.operation),
+            idempotency_key_hash: format!("{:x}", Sha256::digest(row.idempotency_key.as_bytes())),
+            request_hash: row.request_hash,
+            status: row.status,
+            attempt_count: row.attempt_count,
+            max_attempts: row.max_attempts,
+            next_run_at: row.next_run_at,
+            last_error_code: row
+                .last_error_code
+                .as_deref()
+                .map(crate::context::plugins::redact_diagnostic),
+            last_error_message: row
+                .last_error_message
+                .as_deref()
+                .map(crate::context::plugins::redact_diagnostic),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            completed_at: row.completed_at,
+            attempts,
+        });
+    }
+
+    Ok(ContextPluginOperations {
+        config,
+        validation_errors: safe_config.validation_errors,
+        health,
+        jobs,
+    })
 }
 
 pub async fn context_package_get_core(
@@ -476,6 +600,26 @@ pub async fn specos_context_overview(
     folder_id: i32,
 ) -> Result<ContextOverview, DbError> {
     context_overview_core(&db, &memory, folder_id).await
+}
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn specos_context_plugin_operations_get(
+    db: tauri::State<'_, AppDatabase>,
+    memory: tauri::State<'_, std::sync::Arc<crate::memory::MemoryService>>,
+    folder_id: i32,
+    provider_kind: Option<String>,
+    provider_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<ContextPluginOperations, DbError> {
+    context_plugin_operations_core(
+        &db,
+        &memory,
+        folder_id,
+        provider_kind,
+        provider_id,
+        limit,
+    )
+    .await
 }
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]

@@ -1402,6 +1402,7 @@ mod tauri_app {
                 specos_control_commands::specos_context_config_get,
                 specos_control_commands::specos_context_config_save,
                 specos_control_commands::specos_context_overview,
+                specos_control_commands::specos_context_plugin_operations_get,
                 specos_control_commands::specos_context_package_get,
                 specos_control_commands::specos_work_task_runs,
                 specos_control_commands::specos_work_task_dependencies,

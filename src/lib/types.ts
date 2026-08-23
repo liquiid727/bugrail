@@ -1891,6 +1891,52 @@ export interface ContextOverview {
   activity: ContextActivityInfo[]
 }
 
+export interface ContextPluginConfigInfo {
+  id: string
+  kind: string
+  adapter: string | null
+  enabled: boolean
+  required: boolean
+  capabilities: string[]
+  endpoint: string | null
+  secretEnvConfigured: boolean
+}
+
+export interface ProviderJobAttemptInfo {
+  attemptNo: number
+  status: string
+  startedAt: string
+  finishedAt: string | null
+  errorCode: string | null
+  errorMessage: string | null
+}
+
+export interface ProviderJobInfo {
+  id: number
+  providerKind: string
+  providerId: string
+  operation: string
+  idempotencyKeyHash: string
+  requestHash: string
+  status: string
+  attemptCount: number
+  maxAttempts: number
+  nextRunAt: string
+  lastErrorCode: string | null
+  lastErrorMessage: string | null
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+  attempts: ProviderJobAttemptInfo[]
+}
+
+export interface ContextPluginOperations {
+  config: ContextPluginConfigInfo[]
+  validationErrors: string[]
+  health: ContextProviderHealth[]
+  jobs: ProviderJobInfo[]
+}
+
 // --- Memory Provider operations (mirror of src-tauri/src/commands/memory.rs) ---
 
 export interface MemoryProviderTestResult {

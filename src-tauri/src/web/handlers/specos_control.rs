@@ -43,6 +43,17 @@ pub struct ContextSaveParams {
     pub config: ContextConfig,
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPluginOperationsParams {
+    pub folder_id: i32,
+    #[serde(default)]
+    pub provider_kind: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+#[derive(Deserialize)]
 pub struct StringIdParams {
     pub id: String,
 }
@@ -138,6 +149,22 @@ pub async fn context_overview(
 ) -> Result<Json<ContextOverview>, AppCommandError> {
     Ok(Json(
         core::context_overview_core(&s.db, &s.memory_service, p.folder_id).await?,
+    ))
+}
+pub async fn context_plugin_operations(
+    Extension(s): Extension<Arc<AppState>>,
+    Json(p): Json<ContextPluginOperationsParams>,
+) -> Result<Json<ContextPluginOperations>, AppCommandError> {
+    Ok(Json(
+        core::context_plugin_operations_core(
+            &s.db,
+            &s.memory_service,
+            p.folder_id,
+            p.provider_kind,
+            p.provider_id,
+            p.limit,
+        )
+        .await?,
     ))
 }
 pub async fn context_package_get(

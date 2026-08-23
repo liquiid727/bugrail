@@ -11,6 +11,7 @@ const folderState = vi.hoisted(() => ({
 
 const api = vi.hoisted(() => ({
   specosContextOverview: vi.fn(),
+  specosContextPluginOperationsGet: vi.fn(),
   specosContextConfigSave: vi.fn(),
 }))
 
@@ -80,6 +81,12 @@ describe("ContextPage states (issues 053/055/058/060)", () => {
     folderState.activeFolderId = 7
     vi.clearAllMocks()
     api.specosContextOverview.mockResolvedValue(overview())
+    api.specosContextPluginOperationsGet.mockResolvedValue({
+      config: [],
+      validationErrors: [],
+      health: [],
+      jobs: [],
+    })
   })
 
   it("shows no-workspace when no project is open", async () => {
@@ -207,6 +214,61 @@ describe("ContextPage states (issues 053/055/058/060)", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Activity" }))
     expect(screen.getByText("package")).toBeInTheDocument()
     expect(screen.getByText("1 items, 48 bytes")).toBeInTheDocument()
+  })
+
+  it("shows persisted plugin health and job projections", async () => {
+    api.specosContextPluginOperationsGet.mockResolvedValue({
+      config: [
+        {
+          id: "wiki",
+          kind: "wiki",
+          adapter: "deterministic-wiki",
+          enabled: true,
+          required: false,
+          capabilities: ["health", "search"],
+          endpoint: null,
+          secretEnvConfigured: false,
+        },
+      ],
+      validationErrors: [],
+      health: [
+        {
+          id: "wiki",
+          kind: "wiki",
+          status: "healthy",
+          message: null,
+          checkedAt: "2026-08-23T00:00:00Z",
+        },
+      ],
+      jobs: [
+        {
+          id: 12,
+          providerKind: "wiki",
+          providerId: "wiki",
+          operation: "sync",
+          idempotencyKeyHash: "abcdef1234567890",
+          requestHash: "0123456789abcdef",
+          status: "queued",
+          attemptCount: 0,
+          maxAttempts: 3,
+          nextRunAt: "2026-08-23T00:00:00Z",
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          createdAt: "2026-08-23T00:00:00Z",
+          updatedAt: "2026-08-23T00:00:00Z",
+          completedAt: null,
+          attempts: [],
+        },
+      ],
+    })
+    renderPage()
+    await userEvent.click(
+      await screen.findByRole("tab", { name: "Operations" })
+    )
+    expect(await screen.findByText("wiki · sync")).toBeInTheDocument()
+    expect(screen.getByText("queued")).toBeInTheDocument()
+    expect(screen.getByText("wiki · health, search")).toBeInTheDocument()
+    expect(screen.queryByText("0123456789abcdef")).toBeNull()
   })
 
   it("keeps last-good snapshot when refresh fails", async () => {

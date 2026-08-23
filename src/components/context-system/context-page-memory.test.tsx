@@ -17,6 +17,7 @@ const folderState = vi.hoisted(() => ({
 
 const api = vi.hoisted(() => ({
   specosContextOverview: vi.fn(),
+  specosContextPluginOperationsGet: vi.fn(),
   specosContextConfigSave: vi.fn(),
   specosMemoryProviderTest: vi.fn(),
   specosMemoryDeliveryList: vi.fn(),
@@ -132,6 +133,12 @@ describe("ContextPage Memory section (issue-080, T07)", () => {
     folderState.activeFolderId = 7
     vi.clearAllMocks()
     api.specosMemoryDeliveryList.mockResolvedValue([])
+    api.specosContextPluginOperationsGet.mockResolvedValue({
+      config: [],
+      validationErrors: [],
+      health: [],
+      jobs: [],
+    })
   })
 
   it("shows the unconfigured state when no memory provider exists", async () => {

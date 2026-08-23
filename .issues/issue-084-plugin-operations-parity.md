@@ -1,7 +1,7 @@
 ---
 id: issue-084
 title: "Plugin configuration, health and job operations"
-status: planned
+status: verified
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-028
 sourceSpecVersion: "0.1"

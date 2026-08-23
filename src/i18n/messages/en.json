@@ -5067,6 +5067,7 @@
     "providers": "Providers",
     "loadouts": "Loadouts",
     "activity": "Activity",
+    "operations": "Operations",
     "packages": "Packages",
     "noPackages": "No Context Packages yet",
     "noPackagesHint": "A package is created automatically before the next WorkTask Agent starts.",

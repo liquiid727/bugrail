@@ -36,6 +36,7 @@ import type {
   TeamRunInfo,
   ContextConfig,
   ContextOverview,
+  ContextPluginOperations,
   ContextPackageInfo,
   MemoryDeliveryInfo,
   MemoryProviderTestResult,
@@ -3430,6 +3431,20 @@ export async function specosContextOverview(
   folderId: number
 ): Promise<ContextOverview> {
   return getTransport().call("specos_context_overview", { folderId })
+}
+
+export async function specosContextPluginOperationsGet(
+  folderId: number,
+  providerKind?: string,
+  providerId?: string,
+  limit?: number
+): Promise<ContextPluginOperations> {
+  return getTransport().call("specos_context_plugin_operations_get", {
+    folderId,
+    providerKind: providerKind ?? null,
+    providerId: providerId ?? null,
+    limit: limit ?? null,
+  })
 }
 
 export async function specosContextPackageGet(
