@@ -1,7 +1,7 @@
 ---
 id: issue-085
 title: "Independently verify Context plugin foundation"
-status: pending_verification
+status: verified
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-028
 sourceSpecVersion: "0.1"

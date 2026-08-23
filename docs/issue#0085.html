@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation Notes — Issue #0085</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #FAF9F6; color: #1a1a1a; padding: 2.5rem 2rem; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; padding-bottom: 0.375rem; border-bottom: 1px solid #E8E4DE; display: flex; align-items: center; gap: 0.5rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot.design { background: #5B8A72; } .dot.deviation { background: #D97757; } .dot.tradeoff { background: #4A6FA5; } .dot.question { background: #D4A843; }
+    .item { background: #FFFFFF; border: 1px solid #E8E4DE; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; } .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .label { display: inline-block; font-size: 0.6875rem; font-weight: 500; padding: 0.125rem 0.5rem; border-radius: 4px; margin-right: 0.375rem; }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; } .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; } .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; } .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    .matrix { width: 100%; border-collapse: collapse; font-size: 0.8125rem; background: #FFFFFF; border: 1px solid #E8E4DE; }
+    .matrix th, .matrix td { text-align: left; padding: 0.625rem 0.75rem; border-bottom: 1px solid #E8E4DE; }
+    .matrix th { color: #5B8A72; font-weight: 600; }
+    .pass { color: #5B8A72; font-weight: 600; }
+    .footer { text-align: center; margin-top: 2.5rem; color: #B0AAA4; font-size: 0.6875rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Implementation Notes</h1>
+    <p class="meta">Issue <a href="../.issues/issue-085-context-plugin-foundation-verification.md">#0085</a> — Independently verify Context plugin foundation — 2026-08-23</p>
+
+    <h2><span class="dot design"></span> Design Decisions</h2>
+    <div class="item"><h3><span class="label label-design">Evidence</span> Test Spec is the acceptance oracle</h3><p><strong>Choice:</strong> Verify T01–T05 through public plugin contracts, normalized Context candidates, SQLite job facts, shared command-core, Axum and the existing Context UI. <strong>Rationale:</strong> Adapter-private state and transient event delivery are explicitly excluded by the approved Test Spec.</p></div>
+    <div class="item"><h3><span class="label label-design">Evidence</span> Full repository checks close the handoff</h3><p><strong>Result:</strong> Rust full suite passed with 2743 tests and one ignored fixture; frontend passed 319 files and 4228 tests; static build, clippy, server check and MCP check passed.</p></div>
+
+    <h2><span class="dot deviation"></span> Deviations</h2>
+    <div class="item"><h3><span class="label label-deviation">Maintenance</span> Migration rollback count follows the new provider-job migration</h3><p><strong>Finding:</strong> The existing migration test still rolled back six migrations after Issue-083 added provider-job tables after the contract migration. <strong>Correction:</strong> The test now rolls back seven migrations and asserts both provider-job tables are removed. <strong>Reason:</strong> This keeps the legacy-schema rollback oracle aligned with the actual migration order.</p></div>
+    <div class="item"><h3><span class="label label-deviation">Baseline</span> ESLint remains blocked by unrelated formatting debt</h3><p><strong>Result:</strong> <code>pnpm eslint .</code> reports existing Prettier violations in <code>agent/</code> and scripts outside this Spec-028 change. Those files were not reformatted or included in the Issue-085 patch.</p></div>
+
+    <h2><span class="dot tradeoff"></span> Tradeoffs</h2>
+    <div class="item"><h3><span class="label label-tradeoff">Tradeoff</span> Targeted evidence plus full regression suite</h3><p>Targeted tests provide exact T01–T05 traceability, while the full Rust and frontend suites catch migration, transport and UI regressions. The combined run is slower but provides the required independent foundation evidence.</p></div>
+
+    <h2><span class="dot question"></span> Open Questions</h2>
+    <div class="item"><h3><span class="label label-question">Follow-up</span> Real external adapter fixtures remain separate</h3><p>The pinned external CodeGraph fixture test remains ignored unless <code>CODEG_CBM_TEST_BIN</code> is supplied. Spec-028 verification uses deterministic adapters as required; real-provider lifecycle validation belongs to the later provider-specific Issues.</p></div>
+
+    <h2><span class="dot design"></span> Verification Matrix</h2>
+    <table class="matrix">
+      <thead><tr><th>Test Spec</th><th>Evidence</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>T01</td><td>Four isolated contracts, invalid manifests, duplicate IDs, capability routing</td><td class="pass">PASS</td></tr>
+        <tr><td>T02</td><td>AssetRef normalization, provenance, dedupe, budget and ordering</td><td class="pass">PASS</td></tr>
+        <tr><td>T03</td><td>Idempotency, bounded retries, lease recovery and restart reconstruction</td><td class="pass">PASS</td></tr>
+        <tr><td>T04</td><td>Secret/payload redaction, malformed endpoint and bounded diagnostics</td><td class="pass">PASS</td></tr>
+        <tr><td>T05</td><td>Command-core/Axum projection parity, missed events and operations UI</td><td class="pass">PASS</td></tr>
+      </tbody>
+    </table>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>

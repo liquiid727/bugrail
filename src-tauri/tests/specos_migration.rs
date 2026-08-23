@@ -87,9 +87,10 @@ async fn down_drops_only_the_specos_tables() {
         .await
         .unwrap();
 
-    // Revert the latest task-kind/integration handoff, memory, title,
-    // Agent/Team/Context, and contract migrations added after the legacy schema.
-    Migrator::down(&db.conn, Some(6))
+    // Revert the latest provider-job, task-kind/integration handoff, memory,
+    // title, Agent/Team/Context, and contract migrations added after the
+    // legacy schema.
+    Migrator::down(&db.conn, Some(7))
         .await
         .expect("down migrations");
 
@@ -97,6 +98,8 @@ async fn down_drops_only_the_specos_tables() {
     assert!(!names.contains(&"work_task_contract".to_string()));
     assert!(!names.contains(&"work_task_gate_result".to_string()));
     for name in [
+        "provider_job",
+        "provider_job_attempt",
         "work_task_run",
         "work_task_dependency",
         "work_task_handoff",
