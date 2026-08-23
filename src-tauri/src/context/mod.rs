@@ -24,6 +24,8 @@ use crate::models::{
     ContextProviderConfig, ContextProviderHealth,
 };
 
+pub mod plugins;
+
 pub struct PreparedContext {
     pub package: ContextPackageInfo,
     pub prompt: String,
@@ -755,9 +757,45 @@ pub async fn check_provider_health(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok();
+    let plugin_manifests = providers
+        .iter()
+        .filter_map(plugins::PluginManifest::from_provider_config)
+        .filter(|manifest| manifest.kind != plugins::PluginKind::Memory)
+        .collect::<Vec<_>>();
+    let plugin_registry = plugins::PluginRegistry::from_manifests(&plugin_manifests);
     let mut out = Vec::new();
     for provider in providers {
         let checked_at = Utc::now();
+        if let Some(kind) = plugins::PluginKind::parse(&provider.kind) {
+            if kind != plugins::PluginKind::Memory {
+                let health = plugin_registry
+                    .as_ref()
+                    .ok()
+                    .and_then(|registry| registry.health_for(kind, &provider.id));
+                out.push(match health {
+                    Some(health) => ContextProviderHealth {
+                        id: health.id,
+                        kind: health.kind.as_str().into(),
+                        status: match health.status {
+                            plugins::PluginHealthStatus::Healthy => "healthy",
+                            plugins::PluginHealthStatus::Degraded => "degraded",
+                            plugins::PluginHealthStatus::Disabled => "disabled",
+                        }
+                        .into(),
+                        message: health.message,
+                        checked_at,
+                    },
+                    None => ContextProviderHealth {
+                        id: provider.id.clone(),
+                        kind: provider.kind.clone(),
+                        status: "degraded".into(),
+                        message: Some("plugin registry is unavailable".into()),
+                        checked_at,
+                    },
+                });
+                continue;
+            }
+        }
         if !provider.enabled {
             out.push(ContextProviderHealth {
                 id: provider.id.clone(),

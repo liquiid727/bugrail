@@ -1355,6 +1355,29 @@ async fn provider_codebase_valid_config_is_accepted() {
 }
 
 #[tokio::test]
+async fn provider_plugin_registry_projects_static_health_without_http_probe() {
+    let provider = ContextProviderConfig {
+        id: "wiki-fixture".into(),
+        kind: "wiki".into(),
+        adapter: Some("deterministic-wiki".into()),
+        endpoint: None,
+        secret_env: None,
+        enabled: true,
+        required: true,
+        capabilities: vec!["search".into()],
+        ..Default::default()
+    };
+    assert!(
+        specos_control::validate_context(&tiny_context(vec![], vec![provider.clone()])).is_empty()
+    );
+
+    let db = fresh_in_memory_db().await;
+    let health = context::check_provider_health(&[provider], &test_memory(&db), 0).await;
+    assert_eq!(health[0].kind, "wiki");
+    assert_eq!(health[0].status, "healthy");
+}
+
+#[tokio::test]
 async fn provider_codebase_required_is_forbidden() {
     let config = tiny_context(vec![], vec![codebase_provider(true)]);
     let errors = specos_control::validate_context(&config).join("; ");

@@ -407,6 +407,23 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
                 provider.id
             ));
         }
+        if let Some(manifest) =
+            crate::context::plugins::PluginManifest::from_provider_config(provider)
+        {
+            // Memory's production transport remains behind the existing
+            // memory::AdapterRegistry and its typed validator. The shared
+            // foundation registry validates the three new plugin kinds here.
+            if manifest.kind != crate::context::plugins::PluginKind::Memory {
+                if let Err(error) = crate::context::plugins::PluginRegistry::production()
+                    .validate_manifest(&manifest)
+                {
+                    errors.push(format!(
+                        "context provider '{}' plugin manifest: {error}",
+                        safe_context_id(&provider.id)
+                    ));
+                }
+            }
+        }
         if provider.kind == "code-intelligence" {
             // Code Intelligence is a local adapter provider: it is always
             // optional (a degraded index never blocks a run) and never takes
@@ -459,7 +476,10 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
         // fields entirely.
         if provider.kind == crate::memory::MEMORY_KIND {
             errors.extend(crate::memory::config::validate_memory_provider(provider));
-        } else if provider.kind != "code-intelligence" && provider.adapter.is_some() {
+        } else if provider.kind != "code-intelligence"
+            && crate::context::plugins::PluginKind::parse(&provider.kind).is_none()
+            && provider.adapter.is_some()
+        {
             errors.push(format!(
                 "context provider '{}' adapter is only valid for kind '{}'",
                 provider.id,
@@ -502,6 +522,9 @@ pub fn validate_context(value: &ContextConfig) -> Vec<String> {
         }
     }
     errors
+        .into_iter()
+        .map(|error| safe_diagnostic(&error))
+        .collect()
 }
 
 fn unique_ids<'a>(
@@ -519,6 +542,27 @@ fn unique_ids<'a>(
         }
     }
     out
+}
+
+fn safe_context_id(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        .take(64)
+        .collect();
+    if sanitized.is_empty() {
+        "<invalid>".into()
+    } else {
+        sanitized
+    }
+}
+
+fn safe_diagnostic(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(256)
+        .collect()
 }
 
 #[cfg(test)]
@@ -541,6 +585,69 @@ mod tests {
         );
         assert_eq!(provider.endpoint.as_deref(), Some("http://127.0.0.1:8420"));
         assert!(config.loadouts[0].provider_ids.contains(&provider.id));
+        assert!(validate_context(&config).is_empty());
+    }
+
+    #[test]
+    fn plugin_manifest_validation_rejects_unknown_backend_without_resolution() {
+        let config = ContextConfig {
+            version: 1,
+            default_loadout_id: "default".into(),
+            providers: vec![ContextProviderConfig {
+                id: "wiki-provider".into(),
+                kind: "wiki".into(),
+                adapter: Some("not-allowlisted".into()),
+                ..ContextProviderConfig::default()
+            }],
+            loadouts: vec![ContextLoadout {
+                id: "default".into(),
+                provider_ids: vec!["wiki-provider".into()],
+                ..ContextLoadout::default()
+            }],
+            validation_errors: Vec::new(),
+        };
+        let errors = validate_context(&config);
+        assert!(errors.iter().any(|error| {
+            error.contains("plugin manifest") && error.contains("static allowlist")
+        }));
+    }
+
+    #[test]
+    fn plugin_manifest_diagnostic_bounds_untrusted_provider_id() {
+        let config = ContextConfig {
+            version: 1,
+            default_loadout_id: "default".into(),
+            providers: vec![ContextProviderConfig {
+                id: format!("bad\n{}", "x".repeat(300)),
+                kind: "wiki".into(),
+                adapter: Some("not-allowlisted".into()),
+                ..ContextProviderConfig::default()
+            }],
+            loadouts: vec![ContextLoadout {
+                id: "default".into(),
+                provider_ids: vec![],
+                max_items: 64,
+                max_bytes: 512 * 1024,
+                max_tokens: 32_000,
+                ..ContextLoadout::default()
+            }],
+            validation_errors: Vec::new(),
+        };
+        let errors = validate_context(&config).join("; ");
+        assert!(!errors.contains('\n'));
+        assert!(errors.len() < 256);
+    }
+
+    #[test]
+    fn independent_plugin_manifest_is_accepted_by_context_validation() {
+        let mut config = default_context_config();
+        config.providers = vec![ContextProviderConfig {
+            id: "wiki-provider".into(),
+            kind: "wiki".into(),
+            adapter: Some(crate::context::plugins::ADAPTER_DETERMINISTIC_WIKI.into()),
+            ..ContextProviderConfig::default()
+        }];
+        config.loadouts[0].provider_ids = vec!["wiki-provider".into()];
         assert!(validate_context(&config).is_empty());
     }
 
