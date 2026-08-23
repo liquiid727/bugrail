@@ -108,6 +108,15 @@ pub async fn init_database(
         Err(e) => tracing::warn!("[folder-link] failed to hydrate workspace links: {e}"),
     }
 
+    // Provider-job rows are authoritative; refresh events are only hints. A
+    // process restart therefore reconciles expired leases before returning a
+    // usable database to the rest of the runtime.
+    if let Err(e) =
+        service::provider_job_service::recover_expired(&conn, chrono::Utc::now()).await
+    {
+        tracing::warn!("[provider-job] restart recovery failed: {e}");
+    }
+
     Ok(AppDatabase { conn })
 }
 

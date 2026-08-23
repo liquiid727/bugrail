@@ -15,6 +15,8 @@ pub mod folder_link;
 pub mod memory_capture_delivery;
 pub mod model_provider;
 pub mod opened_tab;
+pub mod provider_job;
+pub mod provider_job_attempt;
 pub mod prelude;
 pub mod quick_message;
 pub mod remote_workspace_connection;

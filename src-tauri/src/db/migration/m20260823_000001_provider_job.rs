@@ -1,0 +1,245 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Provider jobs are separate from WorkTask, Automation and the Memory
+        // capture outbox. Only safe identity/hash facts are durable here; the
+        // provider owns the request payload and external idempotency contract.
+        manager
+            .create_table(
+                Table::create()
+                    .table(ProviderJob::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ProviderJob::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJob::ProviderKind)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ProviderJob::ProviderId).string().not_null())
+                    .col(ColumnDef::new(ProviderJob::Operation).string().not_null())
+                    .col(
+                        ColumnDef::new(ProviderJob::IdempotencyKey)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ProviderJob::RequestHash).string().not_null())
+                    .col(ColumnDef::new(ProviderJob::Status).string().not_null())
+                    .col(
+                        ColumnDef::new(ProviderJob::AttemptCount)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJob::MaxAttempts)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJob::NextRunAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ProviderJob::LeaseTokenHash).string().null())
+                    .col(
+                        ColumnDef::new(ProviderJob::LeaseUntil)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .col(ColumnDef::new(ProviderJob::LastErrorCode).string().null())
+                    .col(ColumnDef::new(ProviderJob::LastErrorMessage).text().null())
+                    .col(
+                        ColumnDef::new(ProviderJob::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJob::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJob::CompletedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq_provider_job_idempotency")
+                    .table(ProviderJob::Table)
+                    .col(ProviderJob::ProviderKind)
+                    .col(ProviderJob::ProviderId)
+                    .col(ProviderJob::IdempotencyKey)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_provider_job_due")
+                    .table(ProviderJob::Table)
+                    .col(ProviderJob::Status)
+                    .col(ProviderJob::NextRunAt)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(ProviderJobAttempt::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::JobId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::AttemptNo)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::LeaseTokenHash)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::StartedAt)
+                            .timestamp_with_time_zone()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::FinishedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::ErrorCode)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ProviderJobAttempt::ErrorMessage)
+                            .text()
+                            .null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_provider_job_attempt_job")
+                            .from(ProviderJobAttempt::Table, ProviderJobAttempt::JobId)
+                            .to(ProviderJob::Table, ProviderJob::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq_provider_job_attempt_number")
+                    .table(ProviderJobAttempt::Table)
+                    .col(ProviderJobAttempt::JobId)
+                    .col(ProviderJobAttempt::AttemptNo)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_provider_job_attempt_job")
+                    .table(ProviderJobAttempt::Table)
+                    .col(ProviderJobAttempt::JobId)
+                    .col(ProviderJobAttempt::AttemptNo)
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(ProviderJobAttempt::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(ProviderJob::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum ProviderJob {
+    Table,
+    Id,
+    ProviderKind,
+    ProviderId,
+    Operation,
+    IdempotencyKey,
+    RequestHash,
+    Status,
+    AttemptCount,
+    MaxAttempts,
+    NextRunAt,
+    LeaseTokenHash,
+    LeaseUntil,
+    LastErrorCode,
+    LastErrorMessage,
+    CreatedAt,
+    UpdatedAt,
+    CompletedAt,
+}
+
+#[derive(DeriveIden)]
+enum ProviderJobAttempt {
+    Table,
+    Id,
+    JobId,
+    AttemptNo,
+    LeaseTokenHash,
+    Status,
+    StartedAt,
+    FinishedAt,
+    ErrorCode,
+    ErrorMessage,
+}

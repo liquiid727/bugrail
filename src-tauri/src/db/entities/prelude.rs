@@ -16,6 +16,8 @@ pub use super::folder_link::Entity as FolderLink;
 pub use super::memory_capture_delivery::Entity as MemoryCaptureDelivery;
 pub use super::model_provider::Entity as ModelProvider;
 pub use super::opened_tab::Entity as OpenedTab;
+pub use super::provider_job::Entity as ProviderJob;
+pub use super::provider_job_attempt::Entity as ProviderJobAttempt;
 pub use super::quick_message::Entity as QuickMessage;
 pub use super::token_usage_sync::Entity as TokenUsageSync;
 pub use super::token_usage_turn::Entity as TokenUsageTurn;

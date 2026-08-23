@@ -43,6 +43,7 @@ mod m20260817_000001_work_task_conversation_title;
 mod m20260819_000001_memory_capture_delivery;
 mod m20260821_000001_integration_handoff_git_truth;
 mod m20260821_000002_work_task_kind;
+mod m20260823_000001_provider_job;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -92,6 +93,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260819_000001_memory_capture_delivery::Migration),
             Box::new(m20260821_000001_integration_handoff_git_truth::Migration),
             Box::new(m20260821_000002_work_task_kind::Migration),
+            Box::new(m20260823_000001_provider_job::Migration),
         ]
     }
 }

@@ -1,7 +1,7 @@
 ---
 id: issue-083
 title: "Durable provider jobs and restart recovery"
-status: planned
+status: verified
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-028
 sourceSpecVersion: "0.1"
