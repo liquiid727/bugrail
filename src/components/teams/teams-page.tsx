@@ -15,8 +15,10 @@ import {
   RefreshCw,
   Save,
   Square,
+  ArrowUpRight,
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   specosAgentCatalogGet,
   specosAgentCatalogSave,
@@ -154,6 +156,7 @@ export function TeamsPageTitle() {
 export function TeamsPage() {
   const t = useTranslations("Teams")
   const { activeFolderId } = useActiveFolder()
+  const { openTaskDetail } = useWorkbenchRoute()
   const [agents, setAgents] = useState<AgentCatalog>(EMPTY_AGENTS)
   const [catalog, setCatalog] = useState<TeamCatalog>(EMPTY_TEAMS)
   const [runs, setRuns] = useState<TeamRunInfo[]>([])
@@ -781,18 +784,27 @@ export function TeamsPage() {
                   <CardContent>
                     <div className="grid gap-2 md:grid-cols-3">
                       {run.nodes.map((node) => (
-                        <div
+                        <button
+                          type="button"
                           key={node.nodeId}
-                          className="rounded-xl border p-3"
+                          className="min-w-0 rounded-xl border p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => openTaskDetail(node.taskId)}
+                          aria-label={`${t("openTask")}: ${node.title}`}
                         >
                           <div className="font-medium">{node.title}</div>
                           <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                            <span>
+                            <span className="min-w-0 break-all">
                               #{node.taskId} · run {node.runSeq}
                             </span>
-                            <StatusBadge status={node.status} />
+                            <span className="flex items-center gap-1">
+                              <StatusBadge status={node.status} />
+                              <ArrowUpRight
+                                className="size-3.5"
+                                aria-hidden="true"
+                              />
+                            </span>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </CardContent>
@@ -807,13 +819,38 @@ export function TeamsPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useTranslations("Teams")
   const variant =
     status === "failed" || status === "canceled"
       ? "destructive"
       : status === "done"
         ? "secondary"
         : "outline"
-  return <Badge variant={variant}>{status}</Badge>
+  const label = (() => {
+    switch (status) {
+      case "preparing":
+        return t("status.preparing")
+      case "running":
+        return t("status.running")
+      case "paused":
+        return t("status.paused")
+      case "review":
+        return t("status.review")
+      case "awaiting_input":
+        return t("status.awaitingInput")
+      case "merging":
+        return t("status.merging")
+      case "done":
+        return t("status.done")
+      case "failed":
+        return t("status.failed")
+      case "canceled":
+        return t("status.canceled")
+      default:
+        return t("status.queued")
+    }
+  })()
+  return <Badge variant={variant}>{label}</Badge>
 }
 
 function CenteredState({

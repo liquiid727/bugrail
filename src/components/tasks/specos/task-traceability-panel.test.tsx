@@ -159,6 +159,7 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
       ],
     })
     renderPanel()
+    expect(api.specosWorkTaskHandoffGet).toHaveBeenCalledWith(11, 1)
     await userEvent.click(await screen.findByRole("tab", { name: /Runs/ }))
     expect(screen.getByText("Run 2")).toBeInTheDocument()
     expect(screen.getByText(/implementer · gpt-test/)).toBeInTheDocument()
@@ -170,6 +171,27 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
   })
 
   it("saves a handoff summary and shows transport error retry", async () => {
+    api.specosWorkTaskRuns.mockResolvedValue([
+      {
+        taskId: 11,
+        runSeq: 1,
+        status: "review",
+        agentProfileId: "implementer",
+        modelProfileId: null,
+        agentType: "codex",
+        model: null,
+        modeId: null,
+        reasoning: null,
+        resolution: null,
+        conversationId: null,
+        worktreeFolderId: null,
+        contextPackageId: null,
+        createdAt: "2026-08-13T00:00:00Z",
+        startedAt: null,
+        finishedAt: null,
+        updatedAt: "2026-08-13T00:00:00Z",
+      },
+    ])
     api.specosWorkTaskHandoffSave.mockResolvedValue({
       taskId: 11,
       runSeq: 1,
@@ -207,6 +229,8 @@ describe("TaskTraceabilityPanel run / dependency / handoff / context", () => {
     expect(
       screen.getByRole("button", { name: /Retry: Spec traceability/ })
     ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("tab", { name: /Runs/ }))
+    expect(screen.getByText("Run 1")).toBeInTheDocument()
   })
 
   it("renders integration Git facts and refreshes a conflict plan through transport", async () => {

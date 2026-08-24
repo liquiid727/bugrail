@@ -1,0 +1,36 @@
+{
+  "recordVersion": 1,
+  "date": "2026-08-23",
+  "verifier": "Fairy",
+  "scope": ["BUGRAIL-SPECOS-015", "BUGRAIL-SPECOS-016"],
+  "issues": ["071", "072", "073", "074", "075", "076"],
+  "decision": "partial",
+  "statusAction": "retain existing issue statuses; do not mark verified",
+  "commands": [
+    { "command": "cargo check --no-default-features --features test-utils", "exitCode": 0 },
+    { "command": "cargo clippy --no-default-features --bin codeg-server --lib --features test-utils -- -D warnings", "exitCode": 0 },
+    { "command": "cargo test --no-default-features --features test-utils --test specos_agent_team_015_016 -- --test-threads=1", "exitCode": 0, "passed": 4 },
+    { "command": "cargo test --features test-utils --test specos_agent_team_015_016 -- --test-threads=1", "exitCode": 0, "passed": 4 },
+    { "command": "pnpm exec vitest run targeted 015/016 UI and locale tests", "exitCode": 0, "passed": 23 },
+    { "command": "pnpm test", "exitCode": 0, "testFiles": 319, "passed": 4228 },
+    { "command": "pnpm exec tsc --noEmit", "exitCode": 0 },
+    { "command": "targeted pnpm eslint", "exitCode": 0 }
+  ],
+  "coverage": {
+    "sqliteCommandCore": "pass",
+    "dagAndConcurrency": "pass",
+    "engineUnavailable": "pass",
+    "controlCas": "pass",
+    "axumParity": "pass",
+    "partialLaunch": "partial",
+    "taskDetailNavigation": "browser-pass",
+    "lastGoodRecovery": "unit-pass",
+    "keyboardAndNarrow": "browser-pass-at-1512-and-375",
+    "allLocales": "key-parity-pass-live-zh-CN-only"
+  },
+  "blockedBy": [
+    "live TaskEngine cancel/restart evidence not captured",
+    "live all-locale page matrix not captured"
+  ],
+  "prohibitedScopeChanges": ["018-027", ".eve/", "agent/", "assets/"]
+}

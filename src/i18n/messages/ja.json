@@ -5051,7 +5051,20 @@
     "runtimeDefault": "Use runtime default",
     "modelProfile": "Model profile",
     "skills": "Skills (comma-separated)",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "openTask": "タスクを開く",
+    "status": {
+      "queued": "待機中",
+      "preparing": "準備中",
+      "running": "実行中",
+      "paused": "一時停止",
+      "review": "レビュー待ち",
+      "awaitingInput": "入力待ち",
+      "merging": "マージ中",
+      "done": "完了",
+      "failed": "失敗",
+      "canceled": "キャンセル済み"
+    }
   },
   "ContextSystem": {
     "title": "Context",

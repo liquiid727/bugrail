@@ -70,6 +70,11 @@ pub async fn team_catalog_save_core(
         .map(|p| p.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let context = crate::specos_control::load_context(&root)?;
+    let errors =
+        crate::specos_control::validate_teams_against_catalog(&catalog, &agents, &context, false);
+    if !errors.is_empty() {
+        return Err(DbError::Validation(errors.join("; ")));
+    }
     let loadout_ids = context
         .loadouts
         .iter()
@@ -155,6 +160,12 @@ pub async fn team_run_start_core(
     let agents = crate::specos_control::load_agents(&root)?;
     if !agents.validation_errors.is_empty() {
         return Err(DbError::Validation(agents.validation_errors.join("; ")));
+    }
+    let context = crate::specos_control::load_context(&root)?;
+    let validation_errors =
+        crate::specos_control::validate_teams_against_catalog(&catalog, &agents, &context, true);
+    if !validation_errors.is_empty() {
+        return Err(DbError::Validation(validation_errors.join("; ")));
     }
     let workflow = catalog
         .workflows
@@ -252,7 +263,23 @@ pub async fn team_run_start_core(
         {
             Ok(_) => {}
             Err(e) if specos_runtime_service::is_unmet_dependency(&e) => {}
-            Err(e) => return Err(e),
+            Err(e) => {
+                for task_id in tasks.values() {
+                    let Ok(task) = work_task_service::get_model(&db.conn, *task_id).await else {
+                        continue;
+                    };
+                    let _ = work_task_service::fail(
+                        &db.conn,
+                        *task_id,
+                        &[WorkTaskStatus::Todo, WorkTaskStatus::Queued],
+                        (task.run_seq > 0).then_some(task.run_seq),
+                        "team_launch_error",
+                        Some(e.to_string()),
+                    )
+                    .await;
+                }
+                return Err(e);
+            }
         }
     }
     emit_event(emitter, WORK_TASK_CHANGED_EVENT, WorkTaskChange::Refresh);
@@ -283,6 +310,10 @@ pub async fn team_run_control_core(
             ))
         }
     };
+    let current_state = specos_runtime_service::team_run_control_state(&db.conn, &run_id).await?;
+    if action == "cancel" && current_state == "canceled" {
+        return Ok(());
+    }
     let cancel_engine = if action == "cancel" {
         Some(
             crate::work_task::engine()
@@ -291,15 +322,61 @@ pub async fn team_run_control_core(
     } else {
         None
     };
-    specos_runtime_service::set_team_control(&db.conn, &run_id, state).await?;
     let bindings = specos_runtime_service::team_run_tasks(&db.conn, &run_id).await?;
     if let Some(engine) = cancel_engine {
+        // Pause first so no new queued node can enter setup while cancellation
+        // is being applied. A failure leaves the run paused and retryable.
+        specos_runtime_service::set_team_control(&db.conn, &run_id, "paused").await?;
+        let mut unresolved = Vec::new();
         for binding in bindings {
-            let _ = engine
+            let Ok(task) = work_task_service::get_model(&db.conn, binding.task_id).await else {
+                unresolved.push(binding.task_id);
+                continue;
+            };
+            if matches!(
+                task.status,
+                WorkTaskStatus::Done | WorkTaskStatus::Failed | WorkTaskStatus::Canceled
+            ) {
+                continue;
+            }
+            if task.status == WorkTaskStatus::Merging {
+                unresolved.push(task.id);
+                continue;
+            }
+            if engine
                 .cancel(binding.task_id, Some("team run canceled".into()))
-                .await;
+                .await
+                .is_err()
+            {
+                let still_active = work_task_service::get_model(&db.conn, binding.task_id)
+                    .await
+                    .map(|current| {
+                        !matches!(
+                            current.status,
+                            WorkTaskStatus::Done
+                                | WorkTaskStatus::Failed
+                                | WorkTaskStatus::Canceled
+                        )
+                    })
+                    .unwrap_or(true);
+                if still_active {
+                    unresolved.push(binding.task_id);
+                }
+            }
         }
+        if !unresolved.is_empty() {
+            return Err(DbError::Validation(format!(
+                "team run cancellation incomplete for task(s): {}",
+                unresolved
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        specos_runtime_service::set_team_control(&db.conn, &run_id, state).await?;
     } else if action == "resume" {
+        specos_runtime_service::set_team_control(&db.conn, &run_id, state).await?;
         if let Some(first) = bindings.first() {
             if let Ok(task) = work_task_service::get_model(&db.conn, first.task_id).await {
                 if let Some(engine) = crate::work_task::engine() {
@@ -309,6 +386,8 @@ pub async fn team_run_control_core(
                 }
             }
         }
+    } else {
+        specos_runtime_service::set_team_control(&db.conn, &run_id, state).await?;
     }
     Ok(())
 }

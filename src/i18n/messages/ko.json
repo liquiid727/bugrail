@@ -5051,7 +5051,20 @@
     "runtimeDefault": "Use runtime default",
     "modelProfile": "Model profile",
     "skills": "Skills (comma-separated)",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "openTask": "작업 열기",
+    "status": {
+      "queued": "대기 중",
+      "preparing": "준비 중",
+      "running": "실행 중",
+      "paused": "일시 중지",
+      "review": "검토 대기",
+      "awaitingInput": "입력 대기",
+      "merging": "병합 중",
+      "done": "완료",
+      "failed": "실패",
+      "canceled": "취소됨"
+    }
   },
   "ContextSystem": {
     "title": "Context",

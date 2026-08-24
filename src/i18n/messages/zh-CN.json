@@ -5051,7 +5051,20 @@
     "runtimeDefault": "使用运行时默认模型",
     "modelProfile": "模型配置",
     "skills": "技能（逗号分隔）",
-    "enabled": "启用"
+    "enabled": "启用",
+    "openTask": "打开任务",
+    "status": {
+      "queued": "排队中",
+      "preparing": "准备中",
+      "running": "运行中",
+      "paused": "已暂停",
+      "review": "待审核",
+      "awaitingInput": "等待输入",
+      "merging": "合并中",
+      "done": "已完成",
+      "failed": "失败",
+      "canceled": "已取消"
+    }
   },
   "ContextSystem": {
     "title": "上下文",

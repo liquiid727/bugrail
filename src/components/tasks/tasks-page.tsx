@@ -14,6 +14,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Funnel, Play, Plus, ListTodo, Tag } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   workTaskArchive,
@@ -128,6 +129,7 @@ export function TasksPageTitle() {
 export function TasksPage() {
   const t = useTranslations("Tasks")
   const { tasks, loading, refetch, viewMode } = useTasksView()
+  const { pendingTaskDetailId, clearPendingTaskDetail } = useWorkbenchRoute()
   const folders = useAppWorkspaceStore((s) => s.folders)
   const projectFolders = useMemo(
     () => folders.filter((f) => f.parent_id == null && f.kind === "regular"),
@@ -230,6 +232,11 @@ export function TasksPage() {
       window.removeEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
   }, [])
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null)
+  useEffect(() => {
+    if (pendingTaskDetailId == null) return
+    setDetailTaskId(pendingTaskDetailId)
+    clearPendingTaskDetail()
+  }, [pendingTaskDetailId, clearPendingTaskDetail])
   const [mergeTask, setMergeTask] = useState<WorkTask | null>(null)
   const [mergeOpen, setMergeOpen] = useState(false)
   // The merge dialog's counterpart for a task that changed nothing.

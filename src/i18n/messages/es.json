@@ -5051,7 +5051,20 @@
     "runtimeDefault": "Use runtime default",
     "modelProfile": "Model profile",
     "skills": "Skills (comma-separated)",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "openTask": "Abrir tarea",
+    "status": {
+      "queued": "En cola",
+      "preparing": "Preparando",
+      "running": "En ejecución",
+      "paused": "Pausado",
+      "review": "En revisión",
+      "awaitingInput": "Esperando entrada",
+      "merging": "Fusionando",
+      "done": "Completado",
+      "failed": "Fallido",
+      "canceled": "Cancelado"
+    }
   },
   "ContextSystem": {
     "title": "Context",

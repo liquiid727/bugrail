@@ -1144,6 +1144,14 @@ pub async fn begin_setup(
         txn.rollback().await?;
         return Ok(false);
     }
+    // Re-check Team control and its concurrency slot while holding the same
+    // guard as pause/resume and dependency writers. The queue scan is only a
+    // hint; this is the CAS boundary that prevents a paused run or a second
+    // direct launcher from entering setup.
+    if !specos_runtime_service::team_task_launch_allowed(&txn, id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,

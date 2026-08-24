@@ -5051,7 +5051,20 @@
     "runtimeDefault": "Use runtime default",
     "modelProfile": "Model profile",
     "skills": "Skills (comma-separated)",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "openTask": "فتح المهمة",
+    "status": {
+      "queued": "في الانتظار",
+      "preparing": "جارٍ التحضير",
+      "running": "قيد التشغيل",
+      "paused": "متوقف مؤقتًا",
+      "review": "قيد المراجعة",
+      "awaitingInput": "بانتظار الإدخال",
+      "merging": "جارٍ الدمج",
+      "done": "مكتمل",
+      "failed": "فشل",
+      "canceled": "ملغى"
+    }
   },
   "ContextSystem": {
     "title": "Context",

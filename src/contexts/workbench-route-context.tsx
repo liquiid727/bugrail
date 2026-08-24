@@ -33,6 +33,10 @@ interface WorkbenchRouteContextValue {
   setRoute: (id: WorkbenchRouteId) => void
   /** Sugar for returning to the conversation workspace. */
   openConversations: () => void
+  /** Open a regular task detail from a route that already has the task id. */
+  openTaskDetail: (taskId: number) => void
+  pendingTaskDetailId: number | null
+  clearPendingTaskDetail: () => void
 }
 
 const WorkbenchRouteContext = createContext<WorkbenchRouteContextValue | null>(
@@ -61,9 +65,25 @@ export function useWorkbenchRoute() {
 
 export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
   const [routeId, setRouteId] = useState<WorkbenchRouteId>("conversations")
+  const [pendingTaskDetailId, setPendingTaskDetailId] = useState<number | null>(
+    null
+  )
 
-  const setRoute = useCallback((id: WorkbenchRouteId) => setRouteId(id), [])
-  const openConversations = useCallback(() => setRouteId("conversations"), [])
+  const setRoute = useCallback((id: WorkbenchRouteId) => {
+    setRouteId(id)
+    if (id !== "tasks") setPendingTaskDetailId(null)
+  }, [])
+  const openConversations = useCallback(() => {
+    setPendingTaskDetailId(null)
+    setRouteId("conversations")
+  }, [])
+  const openTaskDetail = useCallback((taskId: number) => {
+    setPendingTaskDetailId(taskId)
+    setRouteId("tasks")
+  }, [])
+  const clearPendingTaskDetail = useCallback(() => {
+    setPendingTaskDetailId(null)
+  }, [])
 
   const value = useMemo<WorkbenchRouteContextValue>(
     () => ({
@@ -71,8 +91,18 @@ export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
       isConversations: routeId === "conversations",
       setRoute,
       openConversations,
+      openTaskDetail,
+      pendingTaskDetailId,
+      clearPendingTaskDetail,
     }),
-    [routeId, setRoute, openConversations]
+    [
+      routeId,
+      setRoute,
+      openConversations,
+      openTaskDetail,
+      pendingTaskDetailId,
+      clearPendingTaskDetail,
+    ]
   )
 
   return (

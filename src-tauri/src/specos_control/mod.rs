@@ -286,6 +286,12 @@ pub fn validate_teams(value: &TeamCatalog) -> Vec<String> {
     if value.version <= 0 {
         errors.push("team catalog version must be positive".into());
     }
+    if value.teams.len() > 64 {
+        errors.push("team catalog must contain at most 64 teams".into());
+    }
+    if value.workflows.len() > 128 {
+        errors.push("team catalog must contain at most 128 workflows".into());
+    }
     let team_ids = unique_ids(
         value.teams.iter().map(|t| t.id.as_str()),
         "team",
@@ -296,7 +302,20 @@ pub fn validate_teams(value: &TeamCatalog) -> Vec<String> {
         "workflow",
         &mut errors,
     );
+    for team in &value.teams {
+        validate_text_length(&mut errors, "team", &team.id, 128);
+        validate_text_length(&mut errors, "team name", &team.name, 512);
+        validate_text_length(&mut errors, "team description", &team.description, 8 * 1024);
+        if team.member_profile_ids.len() > 128 {
+            errors.push(format!(
+                "team '{}' may contain at most 128 member profiles",
+                team.id
+            ));
+        }
+    }
     for workflow in &value.workflows {
+        validate_text_length(&mut errors, "workflow", &workflow.id, 128);
+        validate_text_length(&mut errors, "workflow name", &workflow.name, 512);
         if workflow.version <= 0 {
             errors.push(format!(
                 "workflow '{}' version must be positive",
@@ -331,6 +350,15 @@ pub fn validate_teams(value: &TeamCatalog) -> Vec<String> {
             workflow.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
         let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for node in &workflow.nodes {
+            validate_text_length(&mut errors, "workflow node", &node.id, 128);
+            validate_text_length(&mut errors, "workflow node title", &node.title, 512);
+            validate_text_length(&mut errors, "workflow node prompt", &node.prompt, 64 * 1024);
+            if node.depends_on.len() > 128 {
+                errors.push(format!(
+                    "workflow node '{}' may contain at most 128 dependencies",
+                    node.id
+                ));
+            }
             if node.prompt.trim().is_empty() {
                 errors.push(format!("workflow node '{}' requires a prompt", node.id));
             }
@@ -377,6 +405,102 @@ pub fn validate_teams(value: &TeamCatalog) -> Vec<String> {
         }
     }
     errors
+}
+
+pub fn validate_teams_against_catalog(
+    value: &TeamCatalog,
+    agents: &AgentCatalog,
+    context: &ContextConfig,
+    require_enabled_profiles: bool,
+) -> Vec<String> {
+    let mut errors = validate_teams(value);
+    errors.extend(agents.validation_errors.iter().cloned());
+    errors.extend(context.validation_errors.iter().cloned());
+
+    let profile_ids = agents
+        .agent_profiles
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let enabled_profile_ids = agents
+        .agent_profiles
+        .iter()
+        .filter(|profile| profile.enabled)
+        .map(|profile| profile.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let model_ids = agents
+        .model_profiles
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let loadout_ids = context
+        .loadouts
+        .iter()
+        .map(|loadout| loadout.id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    for team in &value.teams {
+        for profile_id in &team.member_profile_ids {
+            if !profile_ids.contains(profile_id.as_str()) {
+                errors.push(format!(
+                    "team '{}' references missing AgentProfile '{profile_id}'",
+                    team.id
+                ));
+            }
+        }
+    }
+    for workflow in &value.workflows {
+        let Some(team) = value.teams.iter().find(|team| team.id == workflow.team_id) else {
+            continue;
+        };
+        for node in &workflow.nodes {
+            if !profile_ids.contains(node.agent_profile_id.as_str()) {
+                errors.push(format!(
+                    "workflow node '{}' references missing AgentProfile '{}'",
+                    node.id, node.agent_profile_id
+                ));
+            } else if require_enabled_profiles
+                && !enabled_profile_ids.contains(node.agent_profile_id.as_str())
+            {
+                errors.push(format!(
+                    "AgentProfile '{}' is unavailable",
+                    node.agent_profile_id
+                ));
+            }
+            if !team.member_profile_ids.contains(&node.agent_profile_id) {
+                errors.push(format!(
+                    "workflow node '{}' AgentProfile '{}' is not a member of Team '{}'",
+                    node.id, node.agent_profile_id, team.id
+                ));
+            }
+            if let Some(model_id) = &node.model_profile_id {
+                if !model_ids.contains(model_id.as_str()) {
+                    errors.push(format!(
+                        "workflow node '{}' references a missing Model Profile",
+                        node.id
+                    ));
+                }
+            }
+            if let Some(loadout_id) = &node.context_loadout_id {
+                if !loadout_ids.contains(loadout_id.as_str()) {
+                    errors.push(format!(
+                        "workflow node '{}' references a missing Context Loadout",
+                        node.id
+                    ));
+                }
+            }
+        }
+    }
+    errors
+}
+
+fn validate_text_length(errors: &mut Vec<String>, kind: &str, value: &str, max_bytes: usize) {
+    if value.len() > max_bytes {
+        errors.push(format!(
+            "{kind} '{}' exceeds the {max_bytes}-byte limit",
+            value.chars().take(32).collect::<String>()
+        ));
+    }
 }
 
 pub fn validate_context(value: &ContextConfig) -> Vec<String> {

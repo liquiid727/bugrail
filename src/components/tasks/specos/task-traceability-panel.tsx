@@ -71,6 +71,7 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
   const [integrationPlan, setIntegrationPlan] =
     useState<IntegrationPlan | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hasLoadedData, setHasLoadedData] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -90,7 +91,7 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
         workTaskGateList(task.id),
         specosWorkTaskRuns(task.id),
         specosWorkTaskDependencies(task.id),
-        specosWorkTaskHandoffGet(task.id),
+        specosWorkTaskHandoffGet(task.id, task.run_seq),
       ])
       setContract(nextContract)
       setDecision(nextDecision)
@@ -111,12 +112,13 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
       setContextPackage(
         packageId ? await specosContextPackageGet(packageId) : null
       )
+      setHasLoadedData(true)
     } catch (cause) {
       setError(toErrorMessage(cause))
     } finally {
       setLoading(false)
     }
-  }, [task.id, task.task_kind])
+  }, [task.id, task.run_seq, task.task_kind])
 
   useEffect(() => {
     void reload()
@@ -146,99 +148,131 @@ export function TaskTraceabilityPanel({ task }: TaskTraceabilityPanelProps) {
       </div>
 
       <div className="rounded-xl border border-border bg-muted/20 p-3">
-        {loading ? (
+        {loading && !hasLoadedData ? (
           <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
             {t("specosLoading")}
           </div>
-        ) : error ? (
-          <div className="flex flex-col items-start gap-2 py-2">
-            <p className="text-xs text-destructive">{error}</p>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              aria-label={`${t("specosRetry")}: ${t("specosTitle")}`}
-              onClick={() => void reload()}
-            >
-              {t("specosRetry")}
-            </Button>
-          </div>
         ) : (
-          <Tabs defaultValue="contract">
-            <TabsList
-              variant="line"
-              className="h-7 w-full justify-start overflow-x-auto"
-            >
-              <TabsTrigger
-                value="contract"
-                className="h-7 flex-none px-2 text-xs"
-              >
-                <FileCode2 /> {t("specosContractTab")}
-              </TabsTrigger>
-              <TabsTrigger value="runs" className="h-7 flex-none px-2 text-xs">
-                <History /> {t("specosRunsTab")}
-              </TabsTrigger>
-              <TabsTrigger
-                value="context"
-                className="h-7 flex-none px-2 text-xs"
-              >
-                <PackageSearch /> {t("specosContextTab")}
-              </TabsTrigger>
-              <TabsTrigger
-                value="handoff"
-                className="h-7 flex-none px-2 text-xs"
-              >
-                <Send /> {t("specosHandoffTab")}
-              </TabsTrigger>
-              {task.task_kind === "integration" ? (
-                <TabsTrigger
-                  value="integration"
-                  className="h-7 flex-none px-2 text-xs"
+          <>
+            {error && hasLoadedData ? (
+              <div className="mb-2 flex items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5">
+                <p className="min-w-0 break-words text-xs text-destructive">
+                  {error}
+                </p>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  aria-label={`${t("specosRetry")}: ${t("specosTitle")}`}
+                  onClick={() => void reload()}
                 >
-                  <ClipboardCheck /> {t("specosIntegrationTab")}
-                </TabsTrigger>
-              ) : null}
-            </TabsList>
-
-            <TabsContent value="contract" className="pt-2">
-              <ContractPane
-                taskId={task.id}
-                contract={contract}
-                decision={decision}
-                gates={gates}
-                onChanged={reload}
-              />
-            </TabsContent>
-            <TabsContent value="runs" className="pt-2">
-              <RunsPane
-                taskId={task.id}
-                runs={runs}
-                dependencies={dependencies}
-              />
-            </TabsContent>
-            <TabsContent value="context" className="pt-2">
-              <ContextPane packageInfo={contextPackage} />
-            </TabsContent>
-            <TabsContent value="handoff" className="pt-2">
-              <HandoffPane
-                taskId={task.id}
-                handoff={handoff}
-                onSaved={setHandoff}
-              />
-            </TabsContent>
-            {task.task_kind === "integration" ? (
-              <TabsContent value="integration" className="pt-2">
-                <IntegrationPane
-                  plan={integrationPlan}
-                  onRefresh={async () => {
-                    const next = await specosWorkTaskIntegrationRefresh(task.id)
-                    setIntegrationPlan(next)
-                  }}
-                />
-              </TabsContent>
+                  {t("specosRetry")}
+                </Button>
+              </div>
             ) : null}
-          </Tabs>
+            {loading && hasLoadedData ? (
+              <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                {t("specosLoading")}
+              </div>
+            ) : null}
+            {!hasLoadedData && error ? (
+              <div className="flex flex-col items-start gap-2 py-2">
+                <p className="text-xs text-destructive">{error}</p>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  aria-label={`${t("specosRetry")}: ${t("specosTitle")}`}
+                  onClick={() => void reload()}
+                >
+                  {t("specosRetry")}
+                </Button>
+              </div>
+            ) : null}
+            {hasLoadedData ? (
+              <Tabs defaultValue="contract">
+                <TabsList
+                  variant="line"
+                  className="h-7 w-full justify-start overflow-x-auto"
+                >
+                  <TabsTrigger
+                    value="contract"
+                    className="h-7 flex-none px-2 text-xs"
+                  >
+                    <FileCode2 /> {t("specosContractTab")}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="runs"
+                    className="h-7 flex-none px-2 text-xs"
+                  >
+                    <History /> {t("specosRunsTab")}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="context"
+                    className="h-7 flex-none px-2 text-xs"
+                  >
+                    <PackageSearch /> {t("specosContextTab")}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="handoff"
+                    className="h-7 flex-none px-2 text-xs"
+                  >
+                    <Send /> {t("specosHandoffTab")}
+                  </TabsTrigger>
+                  {task.task_kind === "integration" ? (
+                    <TabsTrigger
+                      value="integration"
+                      className="h-7 flex-none px-2 text-xs"
+                    >
+                      <ClipboardCheck /> {t("specosIntegrationTab")}
+                    </TabsTrigger>
+                  ) : null}
+                </TabsList>
+
+                <TabsContent value="contract" className="pt-2">
+                  <ContractPane
+                    taskId={task.id}
+                    contract={contract}
+                    decision={decision}
+                    gates={gates}
+                    onChanged={reload}
+                  />
+                </TabsContent>
+                <TabsContent value="runs" className="pt-2">
+                  <RunsPane
+                    taskId={task.id}
+                    runs={runs}
+                    dependencies={dependencies}
+                  />
+                </TabsContent>
+                <TabsContent value="context" className="pt-2">
+                  <ContextPane packageInfo={contextPackage} />
+                </TabsContent>
+                <TabsContent value="handoff" className="pt-2">
+                  <HandoffPane
+                    taskId={task.id}
+                    handoff={handoff}
+                    onSaved={setHandoff}
+                  />
+                </TabsContent>
+                {task.task_kind === "integration" ? (
+                  <TabsContent value="integration" className="pt-2">
+                    <IntegrationPane
+                      plan={integrationPlan}
+                      onRefresh={async () => {
+                        const next = await specosWorkTaskIntegrationRefresh(
+                          task.id
+                        )
+                        setIntegrationPlan(next)
+                      }}
+                    />
+                  </TabsContent>
+                ) : null}
+              </Tabs>
+            ) : null}
+          </>
         )}
       </div>
     </section>
@@ -797,6 +831,11 @@ function HandoffPane({
 
   return (
     <div className="flex flex-col gap-2">
+      {handoff ? (
+        <p className="text-[0.6875rem] text-muted-foreground">
+          {t("specosRunNumber", { number: handoff.runSeq })} · {handoff.actor}
+        </p>
+      ) : null}
       <Textarea
         value={summary}
         onChange={(event) => setSummary(event.target.value)}

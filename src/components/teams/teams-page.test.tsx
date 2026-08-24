@@ -4,6 +4,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import type { AgentCatalog, TeamCatalog } from "@/lib/types"
+import {
+  useWorkbenchRoute,
+  WorkbenchRouteProvider,
+} from "@/contexts/workbench-route-context"
 
 const folderState = vi.hoisted(() => ({
   activeFolderId: 7 as number | null,
@@ -108,8 +112,20 @@ function configuredTeams(): TeamCatalog {
 function renderPage() {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <TeamsPage />
+      <WorkbenchRouteProvider>
+        <RouteProbe />
+        <TeamsPage />
+      </WorkbenchRouteProvider>
     </NextIntlClientProvider>
+  )
+}
+
+function RouteProbe() {
+  const { routeId, pendingTaskDetailId } = useWorkbenchRoute()
+  return (
+    <output data-testid="route-probe">
+      {routeId}:{pendingTaskDetailId ?? "none"}
+    </output>
   )
 }
 
@@ -186,5 +202,42 @@ describe("TeamsPage / Agent Profile states (issue-045)", () => {
       await screen.findByRole("heading", { name: "Could not load Agent Teams" })
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("opens a run node in the regular task route", async () => {
+    api.specosAgentCatalogGet.mockResolvedValue(configuredAgents())
+    api.specosTeamCatalogGet.mockResolvedValue(configuredTeams())
+    api.specosTeamRunList.mockResolvedValue([
+      {
+        id: "team-run-1",
+        folderId: 7,
+        teamId: "delivery-team",
+        workflowId: "delivery-workflow",
+        workflowVersion: 1,
+        controlState: "running",
+        status: "running",
+        definitionHash: "hash",
+        nodes: [
+          {
+            nodeId: "plan",
+            taskId: 42,
+            title: "Plan",
+            status: "queued",
+            runSeq: 1,
+          },
+        ],
+        createdAt: "2026-08-23T00:00:00Z",
+        updatedAt: "2026-08-23T00:00:00Z",
+        finishedAt: null,
+      },
+    ])
+    renderPage()
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Runs" }))
+    await userEvent.click(
+      screen.getByRole("button", { name: /Open task: Plan/ })
+    )
+
+    expect(screen.getByTestId("route-probe")).toHaveTextContent("tasks:42")
   })
 })

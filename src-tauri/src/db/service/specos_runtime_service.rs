@@ -695,18 +695,55 @@ pub async fn set_team_control(
     if !matches!(state, "running" | "paused" | "canceled") {
         return Err(DbError::Validation("invalid team control state".into()));
     }
+    let _guard = dependency_write_guard().await;
     let row = team_run::Entity::find_by_id(run_id)
         .one(conn)
         .await?
         .ok_or_else(|| DbError::NotFound(format!("team run {run_id}")))?;
-    let mut active = row.into_active_model();
-    active.control_state = Set(state.into());
-    active.updated_at = Set(Utc::now());
-    if state == "canceled" {
-        active.finished_at = Set(Some(Utc::now()));
+    if row.control_state == state {
+        return Ok(());
     }
-    active.update(conn).await?;
+    if row.control_state == "canceled" {
+        return Err(DbError::Validation(
+            "canceled team runs cannot be resumed or paused".into(),
+        ));
+    }
+    let now = Utc::now();
+    let mut update = team_run::Entity::update_many()
+        .col_expr(
+            team_run::Column::ControlState,
+            sea_orm::sea_query::Expr::value(state),
+        )
+        .col_expr(
+            team_run::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now),
+        )
+        .filter(team_run::Column::Id.eq(run_id))
+        .filter(team_run::Column::ControlState.eq(row.control_state));
+    if state == "canceled" {
+        update = update.col_expr(
+            team_run::Column::FinishedAt,
+            sea_orm::sea_query::Expr::value(Some(now)),
+        );
+    }
+    let result = update.exec(conn).await?;
+    if result.rows_affected != 1 {
+        return Err(DbError::Validation(
+            "team control changed concurrently; retry the action".into(),
+        ));
+    }
     Ok(())
+}
+
+pub async fn team_run_control_state(
+    conn: &DatabaseConnection,
+    run_id: &str,
+) -> Result<String, DbError> {
+    Ok(team_run::Entity::find_by_id(run_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("team run {run_id}")))?
+        .control_state)
 }
 
 pub async fn team_run_tasks(
