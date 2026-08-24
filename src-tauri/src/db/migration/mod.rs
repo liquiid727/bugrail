@@ -40,7 +40,9 @@ mod m20260808_000001_custom_agent_supports_mcp;
 mod m20260809_000001_spec_contract;
 mod m20260812_000001_agent_team_context;
 mod m20260817_000001_work_task_conversation_title;
+mod m20260818_000001_work_task_source;
 mod m20260819_000001_memory_capture_delivery;
+mod m20260819_000001_work_task_completion_kind;
 mod m20260821_000001_integration_handoff_git_truth;
 mod m20260821_000002_work_task_kind;
 mod m20260823_000001_provider_job;
@@ -90,7 +92,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260809_000001_spec_contract::Migration),
             Box::new(m20260812_000001_agent_team_context::Migration),
             Box::new(m20260817_000001_work_task_conversation_title::Migration),
+            Box::new(m20260818_000001_work_task_source::Migration),
             Box::new(m20260819_000001_memory_capture_delivery::Migration),
+            Box::new(m20260819_000001_work_task_completion_kind::Migration),
             Box::new(m20260821_000001_integration_handoff_git_truth::Migration),
             Box::new(m20260821_000002_work_task_kind::Migration),
             Box::new(m20260823_000001_provider_job::Migration),

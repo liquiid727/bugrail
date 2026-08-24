@@ -231,7 +231,7 @@ async fn settle_run(s: &Scenario, session_id: &str, status: &str) -> (i32, i32, 
         conversation_service::create(&s.db.conn, s.folder_id, AgentType::ClaudeCode, None, None)
             .await
             .expect("create conversation");
-    conversation_service::update_external_id(&s.db.conn, conv.id, session_id.to_string())
+    conversation_service::bind_external_id(&s.db.conn, conv.id, session_id, &[])
         .await
         .expect("bind external id");
     specos_runtime_service::update_run_state(

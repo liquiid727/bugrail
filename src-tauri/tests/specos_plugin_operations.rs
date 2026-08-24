@@ -79,16 +79,9 @@ async fn t04_operations_projection_redacts_config_and_job_secrets() {
     let memory = codeg_lib::memory::MemoryService::new(codeg_lib::db::AppDatabase {
         conn: db.conn.clone(),
     });
-    let projection = context_plugin_operations_core(
-        &db,
-        &memory,
-        folder_id,
-        None,
-        None,
-        Some(20),
-    )
-    .await
-    .unwrap();
+    let projection = context_plugin_operations_core(&db, &memory, folder_id, None, None, Some(20))
+        .await
+        .unwrap();
     assert_eq!(projection.config.len(), 3);
     assert_eq!(projection.health.len(), 3);
     assert_eq!(projection.jobs.len(), 1);
@@ -126,10 +119,7 @@ async fn t05_axum_operation_projection_reconstructs_without_events() {
 
     let data_dir = tempfile::tempdir().unwrap();
     let static_dir = tempfile::tempdir().unwrap();
-    let state = Arc::new(AppState::new_for_test(
-        db,
-        data_dir.path().to_path_buf(),
-    ));
+    let state = Arc::new(AppState::new_for_test(db, data_dir.path().to_path_buf()));
     let router = build_router(
         state,
         TOKEN.to_string(),
@@ -170,16 +160,9 @@ async fn malformed_endpoint_is_not_reflected_in_operations_or_overview() {
     let memory = codeg_lib::memory::MemoryService::new(codeg_lib::db::AppDatabase {
         conn: db.conn.clone(),
     });
-    let projection = context_plugin_operations_core(
-        &db,
-        &memory,
-        folder_id,
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let projection = context_plugin_operations_core(&db, &memory, folder_id, None, None, None)
+        .await
+        .unwrap();
     let encoded = serde_json::to_string(&projection).unwrap();
     assert!(!encoded.contains("credential"));
     assert!(!encoded.contains("operator"));
