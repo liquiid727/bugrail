@@ -395,6 +395,7 @@ impl AutomationEngine {
             config_values: cfg.config_values.clone(),
             label_snapshot: cfg.label_snapshot.clone(),
             integration_snapshot: None,
+            deliverable: None,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,

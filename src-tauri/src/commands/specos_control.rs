@@ -221,6 +221,7 @@ pub async fn team_run_start_core(
                 config_values: Default::default(),
                 label_snapshot: None,
                 integration_snapshot: None,
+                deliverable: None,
             })
             .map_err(|e| DbError::Validation(e.to_string()))?,
             task_kind: Default::default(),
@@ -611,15 +612,7 @@ pub async fn specos_context_plugin_operations_get(
     provider_id: Option<String>,
     limit: Option<u32>,
 ) -> Result<ContextPluginOperations, DbError> {
-    context_plugin_operations_core(
-        &db,
-        &memory,
-        folder_id,
-        provider_kind,
-        provider_id,
-        limit,
-    )
-    .await
+    context_plugin_operations_core(&db, &memory, folder_id, provider_kind, provider_id, limit).await
 }
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]

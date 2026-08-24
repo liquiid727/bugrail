@@ -222,15 +222,9 @@ pub fn redact_provider_config(provider: &ContextProviderConfig) -> ContextProvid
     safe.endpoint = provider.endpoint.as_deref().and_then(safe_endpoint);
     safe.secret_env = provider.secret_env.as_deref().and_then(safe_env_name);
     safe.service_id_env = provider.service_id_env.as_deref().and_then(safe_env_name);
-    safe.team_id = provider
-        .team_id
-        .as_deref()
-        .map(redact_diagnostic);
+    safe.team_id = provider.team_id.as_deref().map(redact_diagnostic);
     safe.user_id_env = provider.user_id_env.as_deref().and_then(safe_env_name);
-    safe.default_agent_id = provider
-        .default_agent_id
-        .as_deref()
-        .map(redact_diagnostic);
+    safe.default_agent_id = provider.default_agent_id.as_deref().map(redact_diagnostic);
     safe.agent_id_map = provider
         .agent_id_map
         .iter()
@@ -247,7 +241,11 @@ pub fn redact_provider_config(provider: &ContextProviderConfig) -> ContextProvid
 /// Strip controls, cap untrusted diagnostics and replace values that look like
 /// runtime credentials with a stable generic message.
 pub fn redact_diagnostic(value: &str) -> String {
-    let sanitized: String = value.chars().filter(|ch| !ch.is_control()).take(256).collect();
+    let sanitized: String = value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(256)
+        .collect();
     let lower = sanitized.to_ascii_lowercase();
     if [
         "authorization",

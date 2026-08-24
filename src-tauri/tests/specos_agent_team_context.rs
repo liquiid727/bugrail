@@ -449,6 +449,7 @@ async fn t03_retry_run_attribution() {
         work_task::WorkTaskStatus::Failed,
         "test",
         Some(serde_json::json!({"action":"retry","note":"again"})),
+        false,
     )
     .await
     .unwrap()

@@ -35,7 +35,7 @@ fn engine() -> Result<std::sync::Arc<crate::work_task::TaskEngine>, DbError> {
 /// requeues and settings changes without waiting for the reconcile tick. A
 /// process not holding the engine lock skips it — the owning process's tick
 /// picks the change up from the DB.
-fn nudge_pump(folder_id: i32) {
+pub(crate) fn nudge_pump(folder_id: i32) {
     if let Some(engine) = crate::work_task::engine() {
         tokio::spawn(async move { engine.pump_folder(folder_id).await });
     }
@@ -443,9 +443,10 @@ pub async fn work_task_retry_core(
     id: i32,
     note: Option<String>,
     blocks: Vec<serde_json::Value>,
+    allow_duplicate_source: bool,
 ) -> Result<(), DbError> {
     engine()?
-        .retry(id, note, blocks)
+        .retry(id, note, blocks, allow_duplicate_source)
         .await
         .map_err(DbError::Validation)
 }
@@ -459,8 +460,17 @@ pub async fn work_task_requeue_core(
     id: i32,
     note: Option<String>,
     blocks: Vec<serde_json::Value>,
+    allow_duplicate_source: bool,
 ) -> Result<(), DbError> {
-    if !work_task_service::requeue_canceled(&db.conn, id, note.as_deref(), &blocks).await? {
+    if !work_task_service::requeue_canceled(
+        &db.conn,
+        id,
+        note.as_deref(),
+        &blocks,
+        allow_duplicate_source,
+    )
+    .await?
+    {
         return Err(DbError::Validation("task is not canceled".to_string()));
     }
     emit_event(
@@ -547,6 +557,7 @@ pub async fn work_task_cancel_core(id: i32, reason: Option<String>) -> Result<()
 /// review with a readable error). This awaits only the dispatch (validation +
 /// agent spawn), so refused merges surface directly in the dialog.
 /// `message: None` = the agent writes the commit message itself.
+/// `instructions: None` = the user added nothing beyond the standing recipe.
 /// A contract-bound task must first be gate-eligible (Spec not stale, every
 /// required gate passed or validly waived). A blocked merge keeps `review` and
 /// records a `quality_gate_blocked` timeline event.
@@ -558,10 +569,11 @@ pub async fn work_task_merge_core(
     id: i32,
     message: Option<String>,
     delete_worktree: bool,
+    instructions: Option<String>,
 ) -> Result<bool, AppCommandError> {
     enforce_gate_eligibility(emitter, db, id).await?;
     let dispatch = engine()?
-        .merge_task(id, message, delete_worktree, false)
+        .merge_task(id, message, delete_worktree, instructions, false)
         .await
         .map_err(|e| AppCommandError::from(DbError::Validation(e)))?;
     Ok(dispatch.is_queued())
@@ -586,6 +598,30 @@ pub async fn work_task_merge_unqueue_core(
         WorkTaskChange::Upsert { id },
     );
     Ok(())
+}
+
+/// Accept a reviewed forge-sourced task by pushing it back to the repository
+/// it came from: an issue's task opens (or adopts) a pull request for its own
+/// branch, a pull request's task pushes onto that pull request's branch.
+/// Returns the pull request URL.
+///
+/// Unlike the merge dispatch this awaits the WHOLE operation — a push plus two
+/// REST calls, no agent — so both success and failure land in the caller's
+/// dialog. SpecOS eligibility is checked before the engine's forge-source
+/// preconditions, so neither a direct Tauri call nor the web API can bypass
+/// the same quality gates used by local merge and no-change completion.
+pub async fn work_task_deliver_pr_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    pr_title: Option<String>,
+    draft: bool,
+) -> Result<String, AppCommandError> {
+    enforce_gate_eligibility(emitter, db, id).await?;
+    engine()?
+        .deliver_pr(id, pr_title, draft)
+        .await
+        .map_err(|e| AppCommandError::from(DbError::Validation(e)))
 }
 
 /// Finish a reviewed task that has nothing to land (review → done, no merge),
@@ -613,7 +649,7 @@ const QUALITY_GATE_INVALID_WAIVER_I18N: &str = "workTask.qualityGate.invalidWaiv
 /// which nothing gates). Computed fresh from persisted facts + the current Spec
 /// file hash + the worktree HEAD — never from a cached or client-supplied
 /// result (Feature Spec §5.3, AC05).
-async fn task_gate_decision(
+pub(crate) async fn task_gate_decision(
     db: &AppDatabase,
     task_id: i32,
 ) -> Result<Option<WorkTaskGateDecision>, AppCommandError> {
@@ -1354,8 +1390,15 @@ pub async fn work_task_retry(
     id: i32,
     note: Option<String>,
     blocks: Option<Vec<serde_json::Value>>,
+    allow_duplicate_source: Option<bool>,
 ) -> Result<(), DbError> {
-    work_task_retry_core(id, note, blocks.unwrap_or_default()).await
+    work_task_retry_core(
+        id,
+        note,
+        blocks.unwrap_or_default(),
+        allow_duplicate_source.unwrap_or(false),
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1366,6 +1409,7 @@ pub async fn work_task_requeue(
     id: i32,
     note: Option<String>,
     blocks: Option<Vec<serde_json::Value>>,
+    allow_duplicate_source: Option<bool>,
 ) -> Result<(), DbError> {
     work_task_requeue_core(
         &EventEmitter::Tauri(app),
@@ -1373,6 +1417,7 @@ pub async fn work_task_requeue(
         id,
         note,
         blocks.unwrap_or_default(),
+        allow_duplicate_source.unwrap_or(false),
     )
     .await
 }
@@ -1413,8 +1458,17 @@ pub async fn work_task_merge(
     id: i32,
     message: Option<String>,
     delete_worktree: bool,
+    instructions: Option<String>,
 ) -> Result<bool, AppCommandError> {
-    work_task_merge_core(&EventEmitter::Tauri(app), &db, id, message, delete_worktree).await
+    work_task_merge_core(
+        &EventEmitter::Tauri(app),
+        &db,
+        id,
+        message,
+        delete_worktree,
+        instructions,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1446,6 +1500,18 @@ pub async fn work_task_gate_list(
     run_seq: Option<i32>,
 ) -> Result<Vec<WorkTaskGateResultInfo>, DbError> {
     work_task_gate_list_core(&db, task_id, run_seq).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_deliver_pr(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    pr_title: Option<String>,
+    draft: bool,
+) -> Result<String, AppCommandError> {
+    work_task_deliver_pr_core(&EventEmitter::Tauri(app), &db, id, pr_title, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
