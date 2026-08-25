@@ -13,8 +13,10 @@ never reused:
 - `043-060` and `071-076` are the implementation/verification graph derived
   from `.prd/prd-specos-agent-team-context-system.md` and implemented baseline
   Features `002-009`, `015-016`.
-- `077-081` are the draft Memory Plugin MVP01 graph derived from
+- `077-081` are the approved Memory Plugin MVP01 delivery graph derived from
   `.prd/prd-memory-plugin-mvp01.md` and Feature `017`.
+- `082-117` are the draft full Memory Operating Layer graph derived from
+  `.prd/prd-memory-operating-layer-roadmap.md` and Features `028-036`.
 
 ## Current Issue Groups
 
@@ -32,6 +34,15 @@ never reused:
 | `015` Static Team Workflow | `071-073` | catalogs, materialization/scheduler and DAG UI |
 | `016` Team Operations | `074-076` | controls, node trace/handoff and verification |
 | `017` Memory Plugin MVP01 | `077-081` | TencentDB Adapter, capture, recall, UI and verification |
+| `028` Context Plugin Foundation | `082-085` | independent contracts, shared assets, provider jobs and verification |
+| `029` TencentDB Runtime | `086-089` | pinned install, supervisor, migration/operations and verification |
+| `030` Memory Governance | `090-093` | governance overlay, effective recall, Hub and verification |
+| `031` Task Context | `094-097` | artifact offload, canvas/resume, operations and verification |
+| `032` Wiki Plugin | `098-101` | source registry, sync/Context, UI and verification |
+| `033` CodeGraph Plugin | `102-105` | index lifecycle, queries/Context, UI/performance and verification |
+| `034` Skill Evolution | `106-109` | candidates, validation/routing, UI and verification |
+| `035` Asset Loadouts/ACL | `110-113` | generation resolution, scope/handoff, UI and verification |
+| `036` Platform Hardening | `114-117` | operations, failure/performance, packaging/release and verification |
 
 ## Execution Rules
 
@@ -48,3 +59,12 @@ never reused:
   runtime resolution or Context/Memory provenance.
 - Tauri and Axum use the same command-core behavior and must be verified as one
   compatibility contract.
+
+## Local Automation Note
+
+The canonical local Issues are the per-file artifacts in this `.issues/`
+directory, as declared by `.specos/manifest.yaml`. The currently installed
+generic `loop-it-local` scanner expects a different `.feature/.../.issues`
+layout. It needs a repository adapter that reads this index/frontmatter and
+writes status back to these files; do not copy the graph into a second
+directory or maintain two Issue status sources.

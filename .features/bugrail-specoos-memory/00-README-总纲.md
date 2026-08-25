@@ -6,12 +6,13 @@
 > 上游基础：TencentCloud/TencentDB-Agent-Memory  
 > 目标宿主：当前 SpecOS / Codeg-derived 多 CLI Harness + Tauri Desktop + Web Remote Control
 
-> **2026-08-18 边界声明**：本目录是完整产品愿景（Full Product Vision），不是可实施规格。
-> 唯一获得实施授权的是 `BUGRAIL-SPECOS-017` Memory Plugin MVP01
+> **2026-08-23 边界声明**：本目录是完整产品愿景（Full Product Vision），不是可实施规格。
+> 当前唯一获得实施授权的是 `BUGRAIL-SPECOS-017` Memory Plugin MVP01
 > （`.features/BUGRAIL-SPECOS-017-memory-plugin-mvp01/spec.md`，v0.2 approved）。
-> Epic A–K、Memory Hub、短期 Context Offload、sidecar 生命周期管理、Wiki、CodeGraph、
-> Skill Evolution、Recall Router、跨项目共享与动态插件安装均不属于 MVP01；
-> 它们需要各自独立的 Feature、接口与验证，不能借 MVP01 的名义提前实施。
+> 后续能力已经拆为 draft Features `BUGRAIL-SPECOS-028` 至 `036`；只有对应
+> Feature Spec 审批、精确版本 Test Spec、Issues 和验证证据齐全后才能实施和发布。
+> Wiki、CodeGraph 和 Skill Evolution 是独立插件，通过 Context/Asset 层协作，
+> 不能借 Memory 或 MVP01 的名义提前实现。
 
 ---
 
@@ -93,11 +94,14 @@ Mermaid Task Canvas
         │             │              │
    CLI Runtime   Context Router   Asset Layer
         │             │              │
- Codex/Claude     Recall/Loadout   Provider API
-                                  │
-                       TencentDB Provider
-                                  │
-             TencentDB MemoryCore / Knowledge
+ Codex/Claude     Recall/Loadout   Provider contracts
+                                      │
+              ┌───────────┬───────────┼───────────┐
+              │           │           │           │
+           Memory       Wiki      CodeGraph     Skill
+              │           │           │           │
+       TencentDB     independent  codebase-    BugRail
+       Memory Adapter Adapter     memory-mcp   lifecycle
 ```
 
 ### SpecOS 自己负责
@@ -120,16 +124,14 @@ Mermaid Task Canvas
 
 ### TencentDB 默认负责
 
-- L0/L1/L2/L3 pipeline
-- recall/search
-- dedup/conflict processing
-- context offload engine
-- Skill storage/extraction backend
-- Wiki / CodeGraph knowledge services
-- asset metadata
-- Gateway
-- SDK/API
-- storage primitives
+- Agent Memory 的 L0/L1/L2/L3 持久化、抽取与检索 pipeline
+- MemoryCore/Gateway 的 Memory API、内部去重与存储原语
+- BugRail 精确 pin 并通过契约测试的 Memory runtime
+
+TencentDB Knowledge、Skill 或 CodeGraph 能力只能作为各自独立插件的候选
+Adapter；即使共享同一部署、身份或连接配置，也不进入 `MemoryProvider`，不共享
+一个 catch-all manifest。Context offload、有效性/冲突策略、写入/召回编排、注入、
+权限、审计和 UI 仍由 BugRail 负责。
 
 ---
 
@@ -336,9 +338,9 @@ Docs/ADR changes → Wiki incremental refresh
 完整产品采用：
 
 ```text
-SpecOS Provider Contract
+BugRail Memory Contract
         ↓
-TencentDB Provider Adapter
+TencentDB Memory Adapter
         ↓
 Pinned TencentDB build
 ```

@@ -48,6 +48,9 @@ certificate-base64.txt
 .docs
 docs/superpowers
 
+# loop-it-local checkpoints are resumable local state, not delivery evidence.
+.loop-local-state/
+
 # Tauri sidecar staging (built per-target by prepare-sidecars.mjs).
 # The binaries are platform-specific build artifacts; ship them through
 # release.yml, not git.

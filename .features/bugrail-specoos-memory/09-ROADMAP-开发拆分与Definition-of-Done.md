@@ -2,6 +2,13 @@
 
 > 这是完整产品的实施顺序，不代表砍功能。阶段只是为了降低集成风险。
 
+> **2026-08-23 正式拆分**：下面 Epic A-K 保留为产品检查清单，不再直接作为
+> 实施任务。可执行交付以 `.prd/prd-memory-operating-layer-roadmap.md` 和
+> `BUGRAIL-SPECOS-028` 至 `036` 为准：A/D foundation -> `028`，B -> `029`，
+> C/J Memory governance -> `030`，E -> `031`，F -> `032`，G -> `033`，
+> H -> `034`，I -> `035`，剩余 J/K -> `036`。Wiki、CodeGraph、Skill 是独立
+> 插件，不能合并进 Memory Issue。
+
 # EPIC A — Foundation
 
 ## A001 Asset Domain

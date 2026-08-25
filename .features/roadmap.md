@@ -4,6 +4,9 @@
 
 - `.prd/prd-specos-agent-team-context-system.md` — current product baseline.
 - `.prd/prd-memory-plugin-mvp01.md` — current Memory Plugin MVP01 baseline.
+- `.prd/prd-memory-operating-layer-roadmap.md` — umbrella roadmap that splits
+  the full Memory/Knowledge/Skill vision into independent Features `028-036`;
+  it does not authorize all slices as one implementation.
 - `.prd/prd-agent-team-mode-roadmap.md` — umbrella roadmap for Team Mode
   capabilities after the static Team baseline; it does not authorize a whole
   runtime as one Feature.
@@ -43,6 +46,15 @@
 | 25 | `BUGRAIL-SPECOS-025` Team Provider And Model Route Fallback | draft | 022-024 | Policy-controlled fallback through WorkTask generations |
 | 26 | `BUGRAIL-SPECOS-026` Team Backend Restart Recovery | draft | 003,005,016,018 | Scheduler ownership and idempotent WorkTask-first recovery |
 | 27 | `BUGRAIL-SPECOS-027` Team Notifications And Remote Operations | draft | 019,021,023,024,026 | Deduplicated durable notifications and authenticated remote controls |
+| 28 | `BUGRAIL-SPECOS-028` Independent Context Plugin Foundation | draft | 006-009,017 | Separate Memory/Wiki/CodeGraph/Skill contracts, shared asset envelope and durable provider jobs |
+| 29 | `BUGRAIL-SPECOS-029` Managed TencentDB Memory Runtime | draft | 017,028 | Pinned install, lifecycle, secure config, backup, migration and rollback |
+| 30 | `BUGRAIL-SPECOS-030` Memory Governance And Hub | draft | 017,028-029 | Scoped search, correction/delete, effective recall and Memory Hub |
+| 31 | `BUGRAIL-SPECOS-031` Task Context Offload And Resume | draft | 003,006,009,028-029 | Bounded artifacts, summaries, task canvas and generation-safe resume |
+| 32 | `BUGRAIL-SPECOS-032` Independent Wiki Plugin | draft | 006,009,028-029 | Revisioned sources, sync, cited search and Wiki UI |
+| 33 | `BUGRAIL-SPECOS-033` Independent CodeGraph Plugin | draft | 006,009,028 | Existing code-intelligence indexing, impact, Context and UI completion |
+| 34 | `BUGRAIL-SPECOS-034` Independent Skill Evolution Plugin | draft | 003,009,028 | Evidence-backed candidates, validation, versions, routing and rollback |
+| 35 | `BUGRAIL-SPECOS-035` Agent Asset Loadouts And ACL | draft | 002,008,028,030,032-034 | Backend-enforced per-generation asset policy and scope isolation |
+| 36 | `BUGRAIL-SPECOS-036` Memory Platform Operations And Hardening | draft | 029-035 | Diagnostics, portability, failure/performance evidence and release rollback |
 
 ## Migration Notes
 
@@ -58,6 +70,9 @@
 - The previous all-in-one `.features/agent-team` PRD/SPEC has been superseded
   and removed from the Feature directory. Draft Features `018-027` own the
   split behavior and cannot advance to implementation before review.
+- `.features/bugrail-specoos-memory/` remains a product-vision/design source.
+  Draft Features `028-036` and Issues `082-117` are its formal delivery split;
+  only an approved exact-version Feature may authorize implementation.
 
 ## Delivery Boundaries
 

@@ -17,7 +17,11 @@ packages/
   skills/
   codegraph/
   plugin-runtime/
-  provider-tencentdb/
+  providers/
+    memory-tencentdb/
+    wiki-tencentdb/
+    codegraph-codebase-memory-mcp/
+    skill-bugrail/
   observability/
   config/
   jobs/
@@ -67,7 +71,7 @@ interface SkillProvider {
 ## Wiki
 
 ```ts
-interface KnowledgeProvider {
+interface WikiProvider {
   registerSource(input: KnowledgeSourceInput): Promise<KnowledgeSource>;
   sync(sourceId: string): Promise<JobRef>;
   search(input: KnowledgeSearchInput): Promise<KnowledgeHit[]>;
@@ -88,25 +92,39 @@ interface CodeGraphProvider {
 
 ---
 
-# 3. TencentDB Adapter
+# 3. Provider Adapters
 
 ```text
-provider-tencentdb/
+providers/memory-tencentdb/
   client/
     gateway-client.ts
-    knowledge-client.ts
   mappers/
     memory.ts
-    skill.ts
     metadata.ts
-    knowledge.ts
   runtime/
     version.ts
     migrations.ts
   plugin.ts
+
+providers/wiki-tencentdb/
+  client/knowledge-client.ts
+  mappers/wiki.ts
+  plugin.ts
+
+providers/codegraph-codebase-memory-mcp/
+  client/mcp-client.ts
+  mappers/codegraph.ts
+  plugin.ts
+
+providers/skill-bugrail/
+  candidate.ts
+  validator.ts
+  publisher.ts
+  plugin.ts
 ```
 
-所有 upstream DTO 在 mapper 终止。
+所有 upstream DTO 在所属 Adapter mapper 终止。共享 endpoint 或 runtime profile
+不允许跨接口调用，也不允许把 Wiki/CodeGraph/Skill 方法加进 Memory Adapter。
 
 ---
 
@@ -164,40 +182,39 @@ runtime/tencentdb/<version>/
 
 # 7. Config
 
-SpecOS-level：
+BugRail-level 配置按插件分开；`memory` 不是其他资产的父开关：
 
 ```yaml
-memorySystem:
+memory:
   enabled: true
-
   provider:
     id: tencentdb
     mode: local
-
   capture:
     enabled: true
     redactSecrets: true
-
   recall:
     enabled: true
     timeoutMs: 1500
-
-  offload:
-    enabled: true
-
-  skills:
-    enabled: true
-    discovery: auto-validate
-
-  wiki:
-    enabled: true
-
-  codegraph:
-    enabled: true
-
   backup:
     enabled: true
     schedule: daily
+
+taskContext:
+  offloadEnabled: true
+
+wiki:
+  enabled: true
+  provider: { id: tencentdb }
+
+codegraph:
+  enabled: true
+  provider: { id: codebase-memory-mcp }
+
+skillEvolution:
+  enabled: true
+  provider: { id: bugrail }
+  discovery: auto-validate
 ```
 
 上游高级配置保留：

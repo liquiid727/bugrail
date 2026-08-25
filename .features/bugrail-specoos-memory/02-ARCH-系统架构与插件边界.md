@@ -16,11 +16,14 @@ flowchart TB
     CLI3[Other CLI Adapter]
 
     MEM[Memory Provider]
-    KNOW[Knowledge Provider]
+    WIKI[Wiki Provider]
     SKILL[Skill Provider]
     CG[CodeGraph Provider]
 
-    TDB[TencentDB Provider Adapter]
+    MEMAD[TencentDB Memory Adapter]
+    WIKIAD[Independent Wiki Adapter]
+    SKILLAD[BugRail Skill Adapter]
+    CGAD[codebase-memory-mcp Adapter]
     CORE[TencentDB MemoryCore]
     KS[MemoryKnowledge]
     DB[(SQLite / files / indexes)]
@@ -35,19 +38,21 @@ flowchart TB
     CR --> ASSET
     ASSET --> PLUG
     PLUG --> MEM
-    PLUG --> KNOW
+    PLUG --> WIKI
     PLUG --> SKILL
     PLUG --> CG
 
-    MEM --> TDB
-    KNOW --> TDB
-    SKILL --> TDB
-    CG --> TDB
+    MEM --> MEMAD
+    WIKI --> WIKIAD
+    SKILL --> SKILLAD
+    CG --> CGAD
 
-    TDB --> CORE
-    TDB --> KS
+    MEMAD --> CORE
+    WIKIAD --> KS
     CORE --> DB
     KS --> DB
+    SKILLAD --> DB
+    CGAD --> DB
 ```
 
 ---
@@ -80,22 +85,25 @@ specos-desktop
 ```ts
 interface MemoryProvider {}
 interface SkillProvider {}
-interface KnowledgeProvider {}
+interface WikiProvider {}
 interface CodeGraphProvider {}
 interface AssetRegistry {}
 ```
 
-TencentDB 只出现在：
+具体 vendor 名称只出现在各自 Adapter 路径：
 
 ```text
-infrastructure/providers/tencentdb/**
+infrastructure/providers/memory-tencentdb/**
+infrastructure/providers/wiki-*/**
+infrastructure/providers/codegraph-*/**
+infrastructure/providers/skill-*/**
 ```
 
 ---
 
 # 4. Plugin Runtime
 
-完整产品 Plugin contract：
+完整产品使用静态注册的 Plugin contract；本阶段不加载任意第三方代码：
 
 ```ts
 interface SpecOSPlugin {
@@ -106,30 +114,27 @@ interface SpecOSPlugin {
 }
 ```
 
-Manifest：
+每个 manifest 只声明一个主类型。即使多个 Adapter 连接同一 TencentDB 部署，
+也必须独立注册、独立健康检查和独立契约测试：
 
 ```yaml
-id: memory.tencentdb
-type:
-  - memory-provider
-  - skill-provider
-  - knowledge-provider
-  - codegraph-provider
-
-version: 1.0.0
-
-capabilities:
-  chatMemory: true
-  shortTermOffload: true
-  skill: true
-  wiki: true
-  codegraph: true
-
-requires:
-  - lifecycle
-  - secret-store
-  - background-jobs
+plugins:
+  - id: memory.tencentdb
+    type: memory-provider
+    capabilities: [capture, recall, search, governance]
+  - id: wiki.tencentdb
+    type: wiki-provider
+    capabilities: [sync, search, page]
+  - id: codegraph.codebase-memory-mcp
+    type: codegraph-provider
+    capabilities: [index, symbol, references, impact]
+  - id: skill.bugrail
+    type: skill-provider
+    capabilities: [candidate, validate, publish, rollback]
 ```
+
+跨插件共享的只有 `AssetRef`、scope/provenance envelope、durable provider jobs
+和 Context candidate 映射。Memory 不是 Wiki、CodeGraph 或 Skill 的门面。
 
 ---
 
@@ -166,7 +171,8 @@ files.changed
 git.commit.detected
 ```
 
-Memory/Knowledge 插件只订阅事件。
+Memory/Wiki/CodeGraph/Skill 插件通过现有 EventEmitter 接收刷新提示；持久化事实
+才是恢复依据，事件本身不承担可靠队列职责。
 
 ---
 
@@ -326,22 +332,26 @@ cancelled
 
 # 11. Local vs Remote
 
-统一 connection profile：
+每个插件有独立 connection profile；需要时可引用同一个受管 runtime：
 
 ```yaml
-assetEngine:
-  mode: local | remote
-
-  local:
-    autoStart: true
-
-  remote:
-    endpoint:
-    authRef:
-    tls:
+pluginProfiles:
+  memory:
+    provider: tencentdb
+    mode: local | remote
+    runtimeRef: tencentdb-local
+  wiki:
+    provider: tencentdb
+    runtimeRef: tencentdb-local
+  codegraph:
+    provider: codebase-memory-mcp
+    mode: local
+  skill:
+    provider: bugrail
+    mode: local
 ```
 
-UI 和上层 domain 无需改变。
+共享 `runtimeRef` 不等于共享插件 manifest。UI 和上层 domain 不依赖具体 Adapter。
 
 ---
 
@@ -419,15 +429,15 @@ Job state
 Backup manifests
 ```
 
-TencentDB 保存：
+TencentDB Memory Adapter 保存：
 
 ```text
 Memory payloads
 L0-L3
-Skill assets
-Knowledge metadata
-Wiki/CodeGraph indexes/content according to upstream runtime
 ```
+
+Wiki、CodeGraph 和 Skill 数据由各自插件及 Adapter 按独立 Feature 决定。共享
+TencentDB 部署不改变所有权边界。
 
 ---
 
