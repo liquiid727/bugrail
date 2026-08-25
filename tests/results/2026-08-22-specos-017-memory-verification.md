@@ -129,19 +129,18 @@ loopback。
 
 ## 5. Issue 处置
 
-- `issue-077` / `issue-078` / `issue-079` / `issue-080` /
-  `issue-081` → **verified**（T01–T08 全部满足，含钉住上游证据）。
-- `issue-054`（reopened）→ **verified**：修正后的 `GET /health` 探测
-  已实现并有钉住上游真实远端健康证据（T08 §3.1）。
-- 聚合确认：
-  - `issue-055` T02 缺的真实远端健康证据由 T08 §3.1 提供 →
-    **verified**。
-  - `issue-047` / `issue-053` 的 live transport / 包检查证据由本记录
-    §1–§4（command-core + Tauri/Axum parity + pinned fixture）补充 →
-    **verified**。
-  - `issue-060` 的 keyboard/responsive 浏览器证据：见 §4 与
-    context-page 测试；locale key parity 十目录覆盖。
+- `issue-081` → **verified**（T01–T08 全部满足，含钉住上游证据）。
+- `issue-077` / `issue-078` / `issue-079` / `issue-080` 保持
+  `implemented_pending_verification`，与实现类 Issue 的 canonical 状态
+  语义一致。
+- `issue-054` 的 reopen 条件已满足，回到
+  `implemented_pending_verification`；Feature 007 的最终独立验收仍由
+  `issue-055` 负责。
+- 聚合补充证据：T08 §3.1 补充 `issue-055` 的真实远端健康证据，§1–§4
+  补充 `issue-047` / `issue-053` 的 transport/package 证据，并为
+  `issue-060` 提供 locale/UI 测试证据。这些 Issue 保持
+  `pending_verification`，直到各自精确 Test Spec 独立执行并接受。
 
 ## 6. 发布结论
 
-见 README 状态与最终审计记录 `2026-08-22-specos-001-017-audit.md`。
+Feature 017 的接受记录见 `docs/issue#0081.html`。

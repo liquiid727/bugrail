@@ -63,8 +63,8 @@ never reused:
 ## Local Automation Note
 
 The canonical local Issues are the per-file artifacts in this `.issues/`
-directory, as declared by `.specos/manifest.yaml`. The currently installed
-generic `loop-it-local` scanner expects a different `.feature/.../.issues`
-layout. It needs a repository adapter that reads this index/frontmatter and
-writes status back to these files; do not copy the graph into a second
-directory or maintain two Issue status sources.
+directory, as declared by `.specos/manifest.yaml`. The installed
+`loop-it-local` SpecOS selector reads this manifest and validates the per-file
+frontmatter, exact Feature version/hash, dependencies and cycles. Use that
+source directly; do not copy the graph into a second layout or maintain two
+Issue status sources.

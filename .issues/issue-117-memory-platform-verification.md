@@ -1,7 +1,7 @@
 ---
 id: issue-117
 title: "Independently verify Memory Operating Layer release"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-036
 sourceSpecVersion: "0.1"

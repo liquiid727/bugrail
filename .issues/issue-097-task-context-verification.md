@@ -1,7 +1,7 @@
 ---
 id: issue-097
 title: "Independently verify task context offload and resume"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-031
 sourceSpecVersion: "0.1"

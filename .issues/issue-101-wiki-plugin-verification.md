@@ -1,7 +1,7 @@
 ---
 id: issue-101
 title: "Independently verify Wiki plugin"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-032
 sourceSpecVersion: "0.1"

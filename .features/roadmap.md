@@ -35,7 +35,7 @@
 | 9 | `BUGRAIL-SPECOS-009` Context Activity And Inspector | implementation baseline | 006-008 | Context route, packages and provenance |
 | 15 | `BUGRAIL-SPECOS-015` Static Team Workflow | implementation baseline | 002-004,008 | Static Team DAG execution |
 | 16 | `BUGRAIL-SPECOS-016` Team Operations And Handoff | implementation baseline | 005,009,015 | Team controls, node trace and handoff |
-| 17 | `BUGRAIL-SPECOS-017` Memory Plugin MVP01 | implementation baseline | 003,006-009 | TencentDB v3 capture, recall, Context injection and UI |
+| 17 | `BUGRAIL-SPECOS-017` Memory Plugin MVP01 | verified | 003,006-009 | TencentDB v3 capture, recall, Context injection and UI |
 | 18 | `BUGRAIL-SPECOS-018` Team Runtime Reliability Hardening | draft | 015-016 | Atomic controls, scheduler barrier, recovery projection and bounded run queries |
 | 19 | `BUGRAIL-SPECOS-019` Team Goal Intake And Static Workflow Launch | draft | 018 | Persisted project goal and idempotent launch of a selected static Workflow |
 | 20 | `BUGRAIL-SPECOS-020` Dynamic Team Plan Proposal | draft | 001,019 | Planner proposal, deterministic validation, exact-hash approval and WorkTask materialization |
@@ -46,7 +46,7 @@
 | 25 | `BUGRAIL-SPECOS-025` Team Provider And Model Route Fallback | draft | 022-024 | Policy-controlled fallback through WorkTask generations |
 | 26 | `BUGRAIL-SPECOS-026` Team Backend Restart Recovery | draft | 003,005,016,018 | Scheduler ownership and idempotent WorkTask-first recovery |
 | 27 | `BUGRAIL-SPECOS-027` Team Notifications And Remote Operations | draft | 019,021,023,024,026 | Deduplicated durable notifications and authenticated remote controls |
-| 28 | `BUGRAIL-SPECOS-028` Independent Context Plugin Foundation | draft | 006-009,017 | Separate Memory/Wiki/CodeGraph/Skill contracts, shared asset envelope and durable provider jobs |
+| 28 | `BUGRAIL-SPECOS-028` Independent Context Plugin Foundation | verified | 006-009,017 | Separate Memory/Wiki/CodeGraph/Skill contracts, shared asset envelope and durable provider jobs |
 | 29 | `BUGRAIL-SPECOS-029` Managed TencentDB Memory Runtime | draft | 017,028 | Pinned install, lifecycle, secure config, backup, migration and rollback |
 | 30 | `BUGRAIL-SPECOS-030` Memory Governance And Hub | draft | 017,028-029 | Scoped search, correction/delete, effective recall and Memory Hub |
 | 31 | `BUGRAIL-SPECOS-031` Task Context Offload And Resume | draft | 003,006,009,028-029 | Bounded artifacts, summaries, task canvas and generation-safe resume |
@@ -71,8 +71,9 @@
   and removed from the Feature directory. Draft Features `018-027` own the
   split behavior and cannot advance to implementation before review.
 - `.features/bugrail-specoos-memory/` remains a product-vision/design source.
-  Draft Features `028-036` and Issues `082-117` are its formal delivery split;
-  only an approved exact-version Feature may authorize implementation.
+  Feature `028` is approved and verified; draft Features `029-036` and Issues
+  `086-117` are the remaining formal delivery split. Only an approved
+  exact-version Feature may authorize implementation.
 
 ## Delivery Boundaries
 

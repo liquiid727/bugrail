@@ -1,7 +1,7 @@
 ---
 id: issue-093
 title: "Independently verify Memory governance and Hub"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-030
 sourceSpecVersion: "0.1"

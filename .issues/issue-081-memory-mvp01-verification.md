@@ -41,4 +41,5 @@ package/inspector evidence covers the remaining inspector oracles.
   provider are no longer auto-injected one (AC08).
 - Aggregated confirmations for `issue-047`, `issue-053`, `issue-055` and
   `issue-060` are recorded in the same evidence document.
-- Status: `pending_verification` until the evidence record is accepted.
+- Evidence accepted by the independent verification closeout committed as
+  `1c62128d`; canonical status is `verified`.

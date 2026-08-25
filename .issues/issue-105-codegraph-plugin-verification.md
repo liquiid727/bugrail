@@ -1,7 +1,7 @@
 ---
 id: issue-105
 title: "Independently verify CodeGraph plugin"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-033
 sourceSpecVersion: "0.1"

@@ -1,7 +1,7 @@
 ---
 id: issue-089
 title: "Independently verify managed TencentDB runtime"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-029
 sourceSpecVersion: "0.1"

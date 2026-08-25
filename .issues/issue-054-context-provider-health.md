@@ -1,7 +1,7 @@
 ---
 id: issue-054
 title: "Context Provider bootstrap and health boundary"
-status: reopened
+status: implemented_pending_verification
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-007
 sourceSpecVersion: "0.2"
@@ -62,5 +62,7 @@ recorded under `issue-081`.
 - Transport oracles: `tests/memory_fake_gateway.rs` (health classes, trace
   id, vanilla detection, redirect refusal) and
   `tests/specos_agent_team_context.rs` provider T01-T05.
-- Status stays `reopened` until `issue-081` records the pinned upstream
-  health evidence.
+- `issue-081` is verified and records the required pinned upstream health
+  evidence. The reopen is closed; this implementation Issue returns to
+  `implemented_pending_verification` while `issue-055` retains ownership of
+  the exact Feature 007 independent verification.

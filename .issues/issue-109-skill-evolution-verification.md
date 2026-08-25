@@ -1,7 +1,7 @@
 ---
 id: issue-109
 title: "Independently verify Skill Evolution plugin"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-034
 sourceSpecVersion: "0.1"

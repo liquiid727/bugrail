@@ -19,8 +19,8 @@ in `../../.specos/manifest.yaml`.
 ## Current Delivery Posture
 
 Features `001-009` and `015-016` have implementation baselines with independent
-verification still pending. Feature `017` is the active Memory Plugin MVP01
-draft.
+verification still pending. Features `017` and `028` are verified. Features
+`029-036` remain drafts and are not implementation authority.
 
 ## Formal Product And Feature Specs
 
@@ -28,11 +28,14 @@ draft.
 - Memory MVP01 PRD: `../../.prd/prd-memory-plugin-mvp01.md`
 - Delivery order: `../../.features/roadmap.md`
 - Client interaction standard: `../../design/specos-client-interaction-design.md`
-- Active Feature Specs: `001-009`, `015-017` under `../../.features/`
+- Approved Feature Specs: `001-009`, `015-017`, `028` under
+  `../../.features/`
+- Draft Feature Specs: `029-036` under `../../.features/`
 
-Delivery Issues are indexed at `../../.issues/README.md`. Draft Feature `017`
-is not implementation authority until its PRD/Spec/Test Spec are reviewed and
-approved.
+Delivery Issues are indexed at `../../.issues/README.md`. The former draft
+posture for Feature `017` has been superseded by its approved and verified
+`0.2` contract; draft Features `029-036` must be reviewed and approved
+individually before implementation.
 
 ## Design Exploration
 
@@ -47,4 +50,3 @@ backlog are not authoritative.
 - `upstream/tencentdb-agent-memory-patch-contract.md`: frozen
   `v2.0.0+bugrail.1` upstream patch contract (pinned commit, replay/upsert
   semantics, version detection via `/health`).
-

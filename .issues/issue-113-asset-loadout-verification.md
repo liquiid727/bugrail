@@ -1,7 +1,7 @@
 ---
 id: issue-113
 title: "Independently verify asset loadouts and ACL"
-status: pending_verification
+status: planned
 kind: verification
 sourceSpecId: BUGRAIL-SPECOS-035
 sourceSpecVersion: "0.1"
