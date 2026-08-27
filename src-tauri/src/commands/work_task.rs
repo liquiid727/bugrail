@@ -6,7 +6,7 @@
 //! a clean "engine not running" error.
 
 use crate::app_error::AppCommandError;
-use crate::commands::folders::{get_folder_core, git_diff_with_branch};
+use crate::commands::folders::get_folder_core;
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::entities::{work_task_contract, work_task_gate_result};
 use crate::db::error::DbError;
@@ -610,16 +610,21 @@ pub async fn work_task_merge_unqueue_core(
 /// dialog. SpecOS eligibility is checked before the engine's forge-source
 /// preconditions, so neither a direct Tauri call nor the web API can bypass
 /// the same quality gates used by local merge and no-change completion.
+/// `delete_worktree` takes the checkout along once the delivery lands, the
+/// same offer the merge and complete acceptances make. It never changes the
+/// result: a removal that fails leaves a retryable `cleanup_state` on the card
+/// and the delivered URL still comes back.
 pub async fn work_task_deliver_pr_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
     id: i32,
     pr_title: Option<String>,
     draft: bool,
+    delete_worktree: bool,
 ) -> Result<String, AppCommandError> {
     enforce_gate_eligibility(emitter, db, id).await?;
     engine()?
-        .deliver_pr(id, pr_title, draft)
+        .deliver_pr(id, pr_title, draft, delete_worktree)
         .await
         .map_err(|e| AppCommandError::from(DbError::Validation(e)))
 }
@@ -958,6 +963,12 @@ pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
 
 /// Diff of the task worktree vs. its recorded base (`base_sha`, so the view is
 /// stable even when the base branch advances). `file = None` → full patch.
+///
+/// Uncommitted work is part of it: nothing makes the agent commit before the
+/// task reaches review (the merge generation commits the leftovers itself), so
+/// a review that showed only committed work would be reviewing half the task.
+/// New files therefore render as `new file mode` hunks rather than as an empty
+/// diff — see [`crate::work_task::git::diff_patch_with_untracked`].
 pub async fn work_task_diff_core(
     db: &AppDatabase,
     id: i32,
@@ -977,9 +988,12 @@ pub async fn work_task_diff_core(
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
-    git_diff_with_branch(wt.path, base, file).await
+    crate::work_task::git::diff_patch_with_untracked(&wt.path, &base, file.as_deref()).await
 }
 
+/// The file list behind that diff — same base, same "uncommitted work counts"
+/// rule, so the drawer's list and the row's counters cannot tell two different
+/// stories about the same task.
 pub async fn work_task_changed_files_core(
     db: &AppDatabase,
     id: i32,
@@ -996,7 +1010,7 @@ pub async fn work_task_changed_files_core(
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
-    crate::work_task::git::diff_numstat(&wt.path, &base).await
+    crate::work_task::git::diff_numstat_with_untracked(&wt.path, &base).await
 }
 
 // ── SpecOS contract commands (BUGRAIL-SPECOS-001 issue-002) ─────────────────
@@ -1510,8 +1524,9 @@ pub async fn work_task_deliver_pr(
     id: i32,
     pr_title: Option<String>,
     draft: bool,
+    delete_worktree: bool,
 ) -> Result<String, AppCommandError> {
-    work_task_deliver_pr_core(&EventEmitter::Tauri(app), &db, id, pr_title, draft).await
+    work_task_deliver_pr_core(&EventEmitter::Tauri(app), &db, id, pr_title, draft, delete_worktree).await
 }
 
 #[cfg(feature = "tauri-runtime")]

@@ -152,6 +152,11 @@ pub struct DeliverPrParams {
     pub pr_title: Option<String>,
     #[serde(default)]
     pub draft: bool,
+    /// Take the checkout along once the delivery lands. Defaults to `false`,
+    /// so a client that predates the field keeps its worktree — the harmless
+    /// half of a choice nobody made.
+    #[serde(default)]
+    pub delete_worktree: bool,
 }
 
 #[derive(Deserialize)]
@@ -438,6 +443,7 @@ pub async fn work_task_deliver_pr(
         params.id,
         params.pr_title,
         params.draft,
+        params.delete_worktree,
     )
     .await?;
     Ok(Json(url))

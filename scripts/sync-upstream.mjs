@@ -191,7 +191,7 @@ function resolveCargoLockBlock(head, merge) {
   return /^name = "bugrail"$/m.test(head) ? head : ""
 }
 
-function resolveConflicts() {
+export function resolveConflicts() {
   const conflicted = git("diff", "--name-only", "--diff-filter=U")
     .split("\n")
     .filter(Boolean)
@@ -286,9 +286,9 @@ async function cmdPrepare({ tag, dryRun }) {
   console.log(`ℹ  on branch ${branch}`)
 
   const merged = gitOk("merge", "--no-commit", targetTag)
-  if (!merged) {
-    // A merge that fails outright (e.g. local changes) leaves the worktree
-    // clean of markers; report and stop.
+  if (!merged && !gitOk("rev-parse", "--verify", "MERGE_HEAD")) {
+    // A merge that fails outright (e.g. local changes) leaves no MERGE_HEAD.
+    // A conflicted merge has started and must continue through resolution.
     console.error("✗ merge could not start; see git status")
     process.exit(1)
   }

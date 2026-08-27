@@ -1,9 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bugrail",
-  "version": "0.28.1",
+  "version": "0.28.2",
   "identifier": "io.liquiid.bugrail",
   "mainBinaryName": "codeg",
+
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "devUrl": "http://localhost:3000",
