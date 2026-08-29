@@ -566,7 +566,12 @@ impl WatchState {
             return;
         }
         let before = self.resolved_title();
-        capture_title_record(value, record_type, &mut self.custom_title, &mut self.ai_title);
+        capture_title_record(
+            value,
+            record_type,
+            &mut self.custom_title,
+            &mut self.ai_title,
+        );
         let after = self.resolved_title();
         // `capture_title_record` ignores blank values, so `after` is `None`
         // only when nothing has ever been captured — never a clear.
@@ -2824,7 +2829,10 @@ mod tests {
 
         write_lines(&path, &[&ai_title("Fix the login flow")]);
         let _ = tick_now(&mut ws, &ledger);
-        assert_eq!(ws.pending_title.take().as_deref(), Some("Fix the login flow"));
+        assert_eq!(
+            ws.pending_title.take().as_deref(),
+            Some("Fix the login flow")
+        );
 
         // Claude Code re-emits the record; the resolved name did not change.
         write_lines(&path, &[&ai_title("Fix the login flow")]);
@@ -2834,7 +2842,10 @@ mod tests {
         // A genuinely new name is queued again.
         write_lines(&path, &[&ai_title("Fix the signup flow")]);
         let _ = tick_now(&mut ws, &ledger);
-        assert_eq!(ws.pending_title.take().as_deref(), Some("Fix the signup flow"));
+        assert_eq!(
+            ws.pending_title.take().as_deref(),
+            Some("Fix the signup flow")
+        );
     }
 
     /// `customTitle ?? aiTitle` — Claude Code's own precedence, and the one
@@ -2855,8 +2866,7 @@ mod tests {
         write_lines(&path, &[&ai_title("Concise AI Summary")]);
         let _ = tick_now(&mut ws, &ledger);
         assert_eq!(
-            ws.pending_title,
-            None,
+            ws.pending_title, None,
             "the generated title must not displace the user's own name"
         );
         assert_eq!(ws.resolved_title().as_deref(), Some("auth-refactor"));

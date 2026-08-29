@@ -2220,8 +2220,9 @@ impl TaskEngine {
                 // wholesale. Only a LATER retirement that is the last one out
                 // (or a cancel) does that, so it outlasts every generation the
                 // orphan is actually lying about.
-                Some(run_seq) => Self::retract_keys(&mut awaiting, task_id, &orphaned)
-                    .then_some(run_seq),
+                Some(run_seq) => {
+                    Self::retract_keys(&mut awaiting, task_id, &orphaned).then_some(run_seq)
+                }
             }
         };
 
@@ -2751,8 +2752,8 @@ impl TaskEngine {
     /// Best-effort throughout: an unreadable worktree keeps whatever the row
     /// already says, which is exactly the pre-existing behaviour.
     async fn refresh_review_diff_stats(self: &Arc<Self>) {
-        let Ok(rows) = work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Review])
-            .await
+        let Ok(rows) =
+            work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Review]).await
         else {
             return;
         };
@@ -2771,13 +2772,8 @@ impl TaskEngine {
             {
                 continue;
             }
-            match work_task_service::refresh_diff_stats(
-                &self.db.conn,
-                task.id,
-                task.run_seq,
-                stats,
-            )
-            .await
+            match work_task_service::refresh_diff_stats(&self.db.conn, task.id, task.run_seq, stats)
+                .await
             {
                 Ok(true) => {
                     tracing::info!(
@@ -3740,7 +3736,10 @@ impl TaskEngine {
         let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
             return;
         };
-        if let Some(reason) = self.delivered_worktree_keep_reason(&task, published_head).await {
+        if let Some(reason) = self
+            .delivered_worktree_keep_reason(&task, published_head)
+            .await
+        {
             let _ =
                 work_task_service::set_cleanup_state(&self.db.conn, task_id, true, Some(reason))
                     .await;
@@ -3748,7 +3747,8 @@ impl TaskEngine {
             return;
         }
         // Broadcast omitted: the removal announces its own outcome.
-        self.remove_worktree_locked(task_id, Some(published_head)).await;
+        self.remove_worktree_locked(task_id, Some(published_head))
+            .await;
     }
 
     /// Why a delivered task's checkout must outlive the cleanup its user asked
@@ -5444,7 +5444,10 @@ async fn own_work_anchor(
             .and_then(|m| m.head_sha)
             .filter(|s| !s.trim().is_empty());
         if let Some(head) = head {
-            if task_git::commit_present(wt_path, &head).await.unwrap_or(false) {
+            if task_git::commit_present(wt_path, &head)
+                .await
+                .unwrap_or(false)
+            {
                 return Some(head);
             }
         }
@@ -8299,9 +8302,11 @@ mod tests {
         .await
         .expect("claim")
         .expect("claimed");
-        assert!(work_task_service::begin_setup(&engine.db.conn, task_id, next_seq)
-            .await
-            .expect("begin_setup"));
+        assert!(
+            work_task_service::begin_setup(&engine.db.conn, task_id, next_seq)
+                .await
+                .expect("begin_setup")
+        );
         assert!(work_task_service::mark_running(
             &engine.db.conn,
             task_id,
@@ -8384,9 +8389,7 @@ mod tests {
         );
 
         // ...and the surviving generation's own edge still swings both ways.
-        engine
-            .track_request("conn-next", "p:r9".into(), true)
-            .await;
+        engine.track_request("conn-next", "p:r9".into(), true).await;
         assert_eq!(
             status_of(&engine, task_id).await,
             WorkTaskStatus::AwaitingInput
@@ -9037,17 +9040,29 @@ mod tests {
     #[tokio::test]
     async fn a_delivery_takes_the_worktree_along_when_asked() {
         let f = delivery_fixture(FakeForge::default()).await;
-        let url = f.engine.deliver_pr(f.task_id, None, false, true).await.expect("delivery");
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true)
+            .await
+            .expect("delivery");
         assert_eq!(url, "https://github.test/acme/app/pull/42");
 
         let task = row(&f.engine, f.task_id).await;
         assert_eq!(task.status, WorkTaskStatus::Done);
         assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
         assert!(!f.worktree.exists(), "the checkout is gone from disk");
-        assert!(task.worktree_folder_id.is_none(), "and the row's pointer with it");
-        assert!(task.cleanup_state.is_none(), "a removal that worked flags nothing");
         assert!(
-            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7").await.is_err(),
+            task.worktree_folder_id.is_none(),
+            "and the row's pointer with it"
+        );
+        assert!(
+            task.cleanup_state.is_none(),
+            "a removal that worked flags nothing"
+        );
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_err(),
             "the local branch goes too — the push that just ran is what makes that safe"
         );
         assert!(f.engine.merging.lock().await.is_empty());
@@ -9065,14 +9080,28 @@ mod tests {
             ..Default::default()
         })
         .await;
-        let url = f.engine.deliver_pr(f.task_id, None, false, true).await.expect("delivery");
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true)
+            .await
+            .expect("delivery");
         assert_eq!(url, "https://github.test/acme/app/pull/42");
 
         let task = row(&f.engine, f.task_id).await;
-        assert_eq!(task.status, WorkTaskStatus::Done, "the delivery still landed");
+        assert_eq!(
+            task.status,
+            WorkTaskStatus::Done,
+            "the delivery still landed"
+        );
         assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
-        assert!(f.worktree.join("scratch.txt").exists(), "the stray file survives");
-        assert!(task.worktree_folder_id.is_some(), "the checkout is still the task's");
+        assert!(
+            f.worktree.join("scratch.txt").exists(),
+            "the stray file survives"
+        );
+        assert!(
+            task.worktree_folder_id.is_some(),
+            "the checkout is still the task's"
+        );
         assert_eq!(
             task.cleanup_state.as_deref(),
             Some("failed"),
@@ -9093,11 +9122,19 @@ mod tests {
             ..Default::default()
         })
         .await;
-        let url = f.engine.deliver_pr(f.task_id, None, false, true).await.expect("delivery");
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true)
+            .await
+            .expect("delivery");
         assert_eq!(url, "https://github.test/acme/app/pull/42");
 
         let task = row(&f.engine, f.task_id).await;
-        assert_eq!(task.status, WorkTaskStatus::Done, "the delivery still landed");
+        assert_eq!(
+            task.status,
+            WorkTaskStatus::Done,
+            "the delivery still landed"
+        );
         assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
         assert!(f.worktree.exists(), "the checkout survives");
         assert!(task.worktree_folder_id.is_some(), "and stays the task's");
@@ -9108,7 +9145,9 @@ mod tests {
         );
         // Spotless — which is exactly why the other probe could not have
         // caught this, and why the tip check has to exist.
-        assert!(!task_git::has_changes(f.worktree.to_str().unwrap()).await.expect("status"));
+        assert!(!task_git::has_changes(f.worktree.to_str().unwrap())
+            .await
+            .expect("status"));
         let tip = task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
             .await
             .expect("the branch is still there");
@@ -9132,7 +9171,11 @@ mod tests {
             base_ref: "main".into(),
         });
 
-        let url = f.engine.deliver_pr(f.task_id, None, false, false).await.expect("delivery");
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("delivery");
         assert_eq!(url, "https://github.test/acme/app/pull/11");
         assert!(
             f.forge.created.lock().await.is_empty(),
@@ -9158,8 +9201,15 @@ mod tests {
             base_ref: "release/1.x".into(), // ← the only difference
         });
 
-        let url = f.engine.deliver_pr(f.task_id, None, false, false).await.expect("delivery");
-        assert_eq!(url, "https://github.test/acme/app/pull/42", "a new one was opened");
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("delivery");
+        assert_eq!(
+            url, "https://github.test/acme/app/pull/42",
+            "a new one was opened"
+        );
         assert_eq!(f.forge.created.lock().await.len(), 1);
     }
 
@@ -9224,7 +9274,11 @@ mod tests {
             head_repo: "acme/app".into(),
             base_ref: "main".into(),
         });
-        let err = f.engine.deliver_pr(f.task_id, None, false, false).await.expect_err("must stop");
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect_err("must stop");
         assert!(err.contains("closed without merging"), "got {err}");
         assert!(f.forge.created.lock().await.is_empty());
         assert_eq!(
@@ -10186,14 +10240,20 @@ mod tests {
         )
         .await
         .expect("conversation");
-        let run_seq =
-            work_task_service::claim_for_run(&engine.db.conn, live.id, WorkTaskStatus::Todo, "test")
+        let run_seq = work_task_service::claim_for_run(
+            &engine.db.conn,
+            live.id,
+            WorkTaskStatus::Todo,
+            "test",
+        )
+        .await
+        .expect("claim")
+        .expect("claimed");
+        assert!(
+            work_task_service::begin_setup(&engine.db.conn, live.id, run_seq)
                 .await
-                .expect("claim")
-                .expect("claimed");
-        assert!(work_task_service::begin_setup(&engine.db.conn, live.id, run_seq)
-            .await
-            .expect("begin_setup"));
+                .expect("begin_setup")
+        );
         assert!(work_task_service::mark_running(
             &engine.db.conn,
             live.id,
@@ -10233,10 +10293,13 @@ mod tests {
         // Boot can finish now; the event has to survive it.
         drop(guard);
         let probe = engine.clone();
-        wait_for("the settle from an event published during boot", move || {
-            let probe = probe.clone();
-            async move { row(&probe, live.id).await.status == WorkTaskStatus::Review }
-        })
+        wait_for(
+            "the settle from an event published during boot",
+            move || {
+                let probe = probe.clone();
+                async move { row(&probe, live.id).await.status == WorkTaskStatus::Review }
+            },
+        )
         .await;
         assert_eq!(
             row(&engine, merging.id).await.status,
@@ -10258,7 +10321,11 @@ mod tests {
         git_run(&f.worktree, &["reset", "-q", "--mixed", "HEAD~1"]);
         std::fs::write(f.worktree.join("fresh.txt"), "a\nb\n").expect("write");
 
-        let stats = f.engine.snapshot_diff_stats(f.task_id).await.expect("stats");
+        let stats = f
+            .engine
+            .snapshot_diff_stats(f.task_id)
+            .await
+            .expect("stats");
         assert_eq!(stats, (2, 3, 0), "the edit and the new file both count");
         let task = row(&f.engine, f.task_id).await;
         assert!(
@@ -10513,7 +10580,9 @@ mod tests {
         let (engine, task_id, home, _pull_head, branch_point) =
             pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
         let task = row(&engine, task_id).await;
-        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
         let wt = engine
             .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
             .await
@@ -10570,7 +10639,9 @@ mod tests {
         let (engine, task_id, home, _pull_head, _branch_point) =
             pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
         let task = row(&engine, task_id).await;
-        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
         let wt = engine
             .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
             .await
@@ -10618,7 +10689,9 @@ mod tests {
         let (engine, task_id, home, _pull_head, _branch_point) =
             pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
         let task = row(&engine, task_id).await;
-        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
         engine
             .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
             .await
@@ -10631,7 +10704,10 @@ mod tests {
         active.files_changed = Set(Some(1));
         active.additions = Set(Some(1));
         active.deletions = Set(Some(0));
-        active.update(&engine.db.conn).await.expect("stale review row");
+        active
+            .update(&engine.db.conn)
+            .await
+            .expect("stale review row");
 
         engine.refresh_review_diff_stats().await;
 
@@ -10910,7 +10986,10 @@ mod tests {
         as_pull_request_task(&f, pr.clone()).await;
         f.forge.existing.lock().await.push(pr);
 
-        f.engine.deliver_pr(f.task_id, None, false, false).await.expect("fork push back");
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("fork push back");
         assert_eq!(
             f.forge.pushes.lock().await.as_slice(),
             [(
@@ -11021,7 +11100,10 @@ mod tests {
             "acme/app",
         ));
 
-        f.engine.deliver_pr(f.task_id, None, false, false).await.expect("push back");
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("push back");
         assert_eq!(
             f.forge.pushes.lock().await.as_slice(),
             [(

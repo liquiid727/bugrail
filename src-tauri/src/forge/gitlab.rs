@@ -243,8 +243,8 @@ pub async fn list_notes(
         auth.api_base
     );
     let response = api_get(auth, &url).await?;
-    let has_next = header_str(response.headers(), "x-next-page")
-        .is_some_and(|v| !v.trim().is_empty());
+    let has_next =
+        header_str(response.headers(), "x-next-page").is_some_and(|v| !v.trim().is_empty());
     let raw: Vec<RawNote> = response
         .json()
         .await
@@ -1314,7 +1314,10 @@ mod tests {
         let second = list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 7, 2, 20)
             .await
             .expect("notes");
-        assert!(second.comments.is_empty(), "the page held only system events");
+        assert!(
+            second.comments.is_empty(),
+            "the page held only system events"
+        );
         assert!(second.has_next, "…and the discussion continues");
 
         let last = list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 7, 3, 20)
@@ -1343,12 +1346,16 @@ mod tests {
         );
 
         // Coordinates a client made up must not reach the API at all.
-        assert!(list_notes(&auth, "no-slash", ForgeItemKind::Issue, 7, 1, 20)
-            .await
-            .is_err());
-        assert!(list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, 1, 20)
-            .await
-            .is_err());
+        assert!(
+            list_notes(&auth, "no-slash", ForgeItemKind::Issue, 7, 1, 20)
+                .await
+                .is_err()
+        );
+        assert!(
+            list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, 1, 20)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

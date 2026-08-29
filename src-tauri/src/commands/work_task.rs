@@ -1526,7 +1526,15 @@ pub async fn work_task_deliver_pr(
     draft: bool,
     delete_worktree: bool,
 ) -> Result<String, AppCommandError> {
-    work_task_deliver_pr_core(&EventEmitter::Tauri(app), &db, id, pr_title, draft, delete_worktree).await
+    work_task_deliver_pr_core(
+        &EventEmitter::Tauri(app),
+        &db,
+        id,
+        pr_title,
+        draft,
+        delete_worktree,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

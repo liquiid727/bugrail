@@ -13792,9 +13792,8 @@ base_url = \"https://example.test/v1\"
 
         // Other `[features]` keys are not projected, and must not be mistaken
         // for this one.
-        let other = codex_config_projection_from_toml(
-            "model = \"gpt-5\"\n\n[features]\nskills = true\n",
-        );
+        let other =
+            codex_config_projection_from_toml("model = \"gpt-5\"\n\n[features]\nskills = true\n");
         assert_eq!(plain, other);
     }
 

@@ -1363,9 +1363,7 @@ mod tests {
                 assert!(!platforms.iter().any(|p| p.platform == "darwin-x86_64"));
                 for platform in platforms {
                     assert!(
-                        platform
-                            .url
-                            .contains("agy_acp_server_20260818_01_RC01"),
+                        platform.url.contains("agy_acp_server_20260818_01_RC01"),
                         "{} URL lost the build id: {}",
                         platform.platform,
                         platform.url
@@ -1517,12 +1515,7 @@ mod tests {
             "openclaw@2026.7.1",
             Some("22.22.3"),
         );
-        assert_npx_version(
-            AgentType::Cline,
-            "3.0.60",
-            "cline@3.0.60",
-            Some("22.0.0"),
-        );
+        assert_npx_version(AgentType::Cline, "3.0.60", "cline@3.0.60", Some("22.0.0"));
         assert_npx_version(
             AgentType::CodeBuddy,
             "2.139.0",
@@ -1564,7 +1557,11 @@ mod tests {
             "@qoder-ai/qodercli@1.1.31",
             Some("20.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.23", "/releases/download/v1.18.23/");
+        assert_binary_version(
+            AgentType::OpenCode,
+            "1.18.23",
+            "/releases/download/v1.18.23/",
+        );
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the

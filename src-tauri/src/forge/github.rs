@@ -314,7 +314,9 @@ pub async fn list_comments(
     let repo = super::normalize_repo(owner_repo)
         .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
     if number <= 0 {
-        return Err(ForgeError::Invalid(format!("bad work item number: {number}")));
+        return Err(ForgeError::Invalid(format!(
+            "bad work item number: {number}"
+        )));
     }
     // Oldest first, which is this endpoint's own default and the only order a
     // conversation reads in. It takes no `sort` parameter, so there is nothing
@@ -1194,7 +1196,9 @@ mod tests {
         let (api_base, _, _) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let page = list_comments(&auth, "Acme/App", 42, 1, 20).await.expect("comments");
+        let page = list_comments(&auth, "Acme/App", 42, 1, 20)
+            .await
+            .expect("comments");
         assert_eq!((page.page, page.per_page), (1, 20));
         let ids: Vec<&str> = page.comments.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, vec!["1", "2"]);
@@ -1230,10 +1234,14 @@ mod tests {
         let (api_base, _, _) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let first = list_comments(&auth, "acme/app", 42, 1, 20).await.expect("page 1");
+        let first = list_comments(&auth, "acme/app", 42, 1, 20)
+            .await
+            .expect("page 1");
         assert!(first.has_next);
 
-        let second = list_comments(&auth, "acme/app", 42, 2, 20).await.expect("page 2");
+        let second = list_comments(&auth, "acme/app", 42, 2, 20)
+            .await
+            .expect("page 2");
         assert!(!second.has_next, "no rel=next on the last page");
         assert_eq!(second.comments.len(), 1);
         // The `javascript:` avatar is refused rather than forwarded into the
@@ -1248,8 +1256,12 @@ mod tests {
             has_next_link(&headers)
         };
         assert!(link("<http://x?page=2>; rel=\"next\""));
-        assert!(link("<http://x?page=9>; rel=\"last\", <http://x?page=2>; rel=\"next\""));
-        assert!(!link("<http://x?page=1>; rel=\"prev\", <http://x?page=1>; rel=\"first\""));
+        assert!(link(
+            "<http://x?page=9>; rel=\"last\", <http://x?page=2>; rel=\"next\""
+        ));
+        assert!(!link(
+            "<http://x?page=1>; rel=\"prev\", <http://x?page=1>; rel=\"first\""
+        ));
         // A URL that merely CONTAINS the word must not count as the relation.
         assert!(!link("<http://x?q=rel=\"next\">; rel=\"last\""));
         assert!(!has_next_link(&reqwest::header::HeaderMap::new()));
