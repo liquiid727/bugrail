@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -122,6 +122,22 @@ describe("ContextPage states (issues 053/055/058/060)", () => {
     expect(
       screen.getByDisplayValue("AGENTS.md | rules | optional")
     ).toBeInTheDocument()
+  })
+
+  it("keeps the selected Context tab keyboard reachable", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("heading", { name: "No Context Packages yet" })
+
+    const tabList = screen.getByRole("tablist")
+    const overviewTab = screen.getByRole("tab", { name: "Overview" })
+    const codebaseTab = screen.getByRole("tab", { name: "Codebase" })
+    expect(tabList).toHaveAttribute("tabindex", "0")
+
+    act(() => tabList.focus())
+    expect(overviewTab).toHaveFocus()
+    await user.keyboard("{ArrowRight}")
+    await waitFor(() => expect(codebaseTab).toHaveFocus())
   })
 
   it("shows degraded provider banner without replacing last-good data", async () => {
