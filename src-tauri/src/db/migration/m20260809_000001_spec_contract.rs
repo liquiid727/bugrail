@@ -1,11 +1,11 @@
 use sea_orm_migration::prelude::*;
+use sea_orm_migration::sea_orm::TransactionTrait;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+impl Migration {
+    async fn up_statements(&self, manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         // work_task_contract: one optional Spec contract per WorkTask (R01-R03).
         // A legacy task has no row and keeps its current behavior. task_id is the
         // primary key and a hard FK to work_task — the contract dies with its task.
@@ -181,6 +181,21 @@ impl MigrationTrait for Migration {
             .await?;
 
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        let transaction = manager.get_connection().begin().await?;
+        let result = self.up_statements(&SchemaManager::new(&transaction)).await;
+        match result {
+            Ok(()) => transaction.commit().await,
+            Err(error) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
+        }
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

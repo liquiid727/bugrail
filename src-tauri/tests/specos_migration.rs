@@ -8,14 +8,25 @@ use codeg_lib::db::migration::Migrator;
 use codeg_lib::db::service::work_task_service;
 use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_folder};
 use sea_orm::{
-    ActiveValue, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait, QueryFilter,
-    Statement,
+    ActiveValue, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend,
+    EntityTrait, PaginatorTrait, QueryFilter, Statement,
 };
-use sea_orm_migration::MigratorTrait;
+use sea_orm_migration::{prelude::MigrationTrait, MigratorTrait, SchemaManager};
 
-async fn table_names(conn: &codeg_lib::db::AppDatabase) -> Vec<String> {
+struct PreSpecMigrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for PreSpecMigrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        Migrator::migrations()
+            .into_iter()
+            .take_while(|migration| migration.name() != "m20260809_000001_spec_contract")
+            .collect()
+    }
+}
+
+async fn table_names_for_connection(conn: &DatabaseConnection) -> Vec<String> {
     let rows = conn
-        .conn
         .query_all(Statement::from_string(
             DbBackend::Sqlite,
             "SELECT name FROM sqlite_master WHERE type='table'".to_string(),
@@ -25,6 +36,10 @@ async fn table_names(conn: &codeg_lib::db::AppDatabase) -> Vec<String> {
     rows.iter()
         .filter_map(|r| r.try_get("", "name").ok())
         .collect()
+}
+
+async fn table_names(conn: &codeg_lib::db::AppDatabase) -> Vec<String> {
+    table_names_for_connection(&conn.conn).await
 }
 
 async fn index_names(conn: &codeg_lib::db::AppDatabase) -> Vec<String> {
@@ -70,6 +85,55 @@ async fn migration_creates_tables_and_indexes() {
 }
 
 #[tokio::test]
+async fn interrupted_migration_keeps_a_complete_schema_prefix() {
+    let conn = Database::connect("sqlite::memory:").await.unwrap();
+    PreSpecMigrator::up(&conn, None).await.unwrap();
+    conn.execute_unprepared(
+        "CREATE TABLE specos_index_blocker (source_spec_id TEXT); \
+         CREATE INDEX idx_work_task_contract_spec_id \
+         ON specos_index_blocker(source_spec_id);",
+    )
+    .await
+    .unwrap();
+
+    let spec_contract = Migrator::migrations()
+        .into_iter()
+        .find(|migration| migration.name() == "m20260809_000001_spec_contract")
+        .expect("Spec contract migration");
+    let error = spec_contract
+        .up(&SchemaManager::new(&conn))
+        .await
+        .expect_err("the conflicting index must interrupt the SpecOS migration");
+    assert!(error.to_string().contains("idx_work_task_contract_spec_id"));
+
+    let names = table_names_for_connection(&conn).await;
+    let has_contract = names.contains(&"work_task_contract".to_string());
+    let has_gates = names.contains(&"work_task_gate_result".to_string());
+    assert_eq!(
+        has_contract, has_gates,
+        "SpecOS contract schema must be entirely pre- or post-feature"
+    );
+    assert!(
+        !has_contract,
+        "the interrupted migration must restore the pre-feature schema"
+    );
+
+    let applied = conn
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT COUNT(*) AS count FROM seaql_migrations".to_string(),
+        ))
+        .await
+        .unwrap()
+        .expect("migration ledger row");
+    assert_eq!(
+        applied.try_get::<i64>("", "count").unwrap(),
+        PreSpecMigrator::migrations().len() as i64,
+        "the failed migration must not enter the migration ledger"
+    );
+}
+
+#[tokio::test]
 async fn down_drops_only_the_specos_tables() {
     let db = fresh_in_memory_db().await;
     let folder_id = seed_folder(&db, "/tmp/wt-specos-down").await;
@@ -87,10 +151,9 @@ async fn down_drops_only_the_specos_tables() {
         .await
         .unwrap();
 
-    // Revert the latest provider-job, task-kind/integration handoff, memory,
-    // title, Agent/Team/Context, and contract migrations added after the
-    // legacy schema.
-    Migrator::down(&db.conn, Some(7))
+    // Revert the migrations from the current tail through the Spec contract,
+    // leaving the pre-feature WorkTask schema intact.
+    Migrator::down(&db.conn, Some(10))
         .await
         .expect("down migrations");
 
