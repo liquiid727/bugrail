@@ -45,6 +45,9 @@ jobs:
       - name: Test release metadata tooling
         run: pnpm test:release
 
+      - name: Validate SpecOS Issue ledger
+        run: pnpm test:specos && pnpm specos:validate
+
       - name: Lint
         run: pnpm eslint .
 
