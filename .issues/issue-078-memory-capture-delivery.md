@@ -1,7 +1,7 @@
 ---
 id: issue-078
 title: "WorkTask memory capture delivery"
-status: implemented_pending_verification
+status: verified
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -35,7 +35,11 @@ migration, restart and duplicate-delivery oracles.
   payload clearing pass; the pinned T08 run proves replay never increases
   L0 and legacy projects stage nothing.
 
-### 2026-08-23 status
+## Completion Record
 
-- Code committed through `feat(memory): recall integration into context
-  packages`; acceptance of the evidence record is pending review.
+- Verified by `issue-081` against Feature `017` v0.2 and the exact source hash
+  in this Issue.
+- Evidence: `tests/results/2026-08-22-specos-017-memory-verification.md`.
+- Restart recovery, idempotency, privacy bounds, payload clearing and legacy
+  zero-behavior passed the accepted T03/T05/T06/T08 matrix.
+- Spec deviation: none.

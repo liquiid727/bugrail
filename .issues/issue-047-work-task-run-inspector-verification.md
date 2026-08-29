@@ -39,3 +39,9 @@ Test claim/retry/return/merge generations, legacy data, interrupted transactions
 - Command-core T01-T06: pass. Feature Spec 003 is now **approved** for that slice. Re-run the Test Spec (including live transport) before flipping this Issue.
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Deterministic WorkTask/UI regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: live transport and independent Test
+  Spec acceptance were not performed.

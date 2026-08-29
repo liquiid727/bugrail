@@ -50,3 +50,10 @@ Cover missing/stale handoff, conflicts, source heads, gates, legacy summaries, d
 - Status remains `pending_verification`: real TaskEngine conflict
   resolution/retry, restart/idempotency, Axum/Tauri parity, and the full UI
   interaction contract have not been independently demonstrated.
+
+### 2026-08-28 reconciliation
+
+- Deterministic WorkTask/UI regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: TaskEngine conflict/retry, restart,
+  live transport parity, and independent UI acceptance remain outstanding.

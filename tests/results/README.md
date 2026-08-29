@@ -13,3 +13,4 @@ must retain a stable reference to it.
 | `2026-08-23-specos-001-verification.md` | `001` issues `001-005` | not verified / blocked (T17/T20, transport/UI evidence, repository gates) |
 | `2026-08-23-specos-001-gap-evidence/README.md` | `001` issues `001-005` | T17/T20/T27 fixtures added, matrix green with logs; still not verified (T28-T31, migration fixture, independent run) |
 | `2026-08-23-specos-015-016-verification.md` | `015-016` issues `071-076` | partial; runtime/browser evidence pending |
+| `2026-08-28-specos-approved-issue-reconciliation.md` | approved `001-017,028`; restored `022-042/061-070` | reconciliation complete; live/browser/external verification gaps retained |

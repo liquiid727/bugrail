@@ -1,7 +1,7 @@
 ---
 id: issue-079
 title: "Memory recall and Context Package integration"
-status: implemented_pending_verification
+status: verified
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -29,7 +29,7 @@ Cover `T04-T05` and remote-content security in `T06`, including deterministic
 package hashes, empty recall and restart inspection.
 
 
-### 2026-08-23 status
+## Completion Record
 
 - Implementation landed in `feat(memory): recall integration into context
   packages` (Context recall normalization, fixed package order, budget and
@@ -37,3 +37,6 @@ package hashes, empty recall and restart inspection.
 - T04/T05 oracles pass in `tests/memory_recall_context.rs` and the pinned
   T08 run (`tests/results/2026-08-22-specos-017-memory-verification.md`)
   demonstrates capture-to-later-recall after restart.
+- `issue-081` accepted this exact Feature hash; required/optional failure,
+  immutable provenance and budget behavior are verified.
+- Spec deviation: none.

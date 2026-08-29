@@ -40,3 +40,11 @@ dependsOn: [issue-001, issue-002, issue-003, issue-004]
   `T29-T31` UI journeys/redaction/screenshots, the migration
   interrupted-transaction fixture, and a code-free independent verification
   run are still required against this Spec hash.
+
+### 2026-08-28 reconciliation
+
+- Evidence: `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- The Spec contract migration now has explicit transactional DDL and the real
+  interruption fixture passes, closing that previously recorded gap.
+- Status remains `pending_verification`: `T28-T31` and a code-free independent
+  verification run are still required against the bound Test Spec.

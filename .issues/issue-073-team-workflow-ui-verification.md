@@ -30,3 +30,11 @@ Verify sequential/parallel readiness, cycle rejection, concurrency, restart, sta
 - Record exact commands and durable evidence before changing this Issue to
   verified; implementation status alone does not satisfy the source Test Spec.
 
+## Verification Record
+
+### 2026-08-28 reconciliation
+
+- Deterministic Team workflow and UI regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: live transport/browser and
+  independent Test Spec acceptance remain outstanding.

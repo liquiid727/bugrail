@@ -1,7 +1,7 @@
 ---
 id: issue-077
 title: "Memory Plugin contract and TencentDB v3 transport"
-status: implemented_pending_verification
+status: verified
 kind: implementation
 sourceSpecId: BUGRAIL-SPECOS-017
 sourceSpecVersion: "0.2"
@@ -37,7 +37,11 @@ upstream contract fixture before changing implementation status.
   Gateway and the pinned T08 fixture, including vanilla-version detection
   and the replay idempotency patch contract.
 
-### 2026-08-23 status
+## Completion Record
 
-- Code committed through `feat(memory): recall integration into context
-  packages`; acceptance of the evidence record is pending review.
+- Verified by `issue-081` against Feature `017` v0.2 and the exact source hash
+  in this Issue.
+- Evidence: `tests/results/2026-08-22-specos-017-memory-verification.md`.
+- Implementation commits include the Memory transport, fake Gateway contract,
+  pinned `v2.0.0+bugrail.1` fixture and the accepted closeout `1c62128d`.
+- Spec deviation: none; the pinned upstream patch contract remains explicit.

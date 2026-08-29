@@ -129,10 +129,10 @@ loopback。
 
 ## 5. Issue 处置
 
-- `issue-081` → **verified**（T01–T08 全部满足，含钉住上游证据）。
-- `issue-077` / `issue-078` / `issue-079` / `issue-080` 保持
-  `implemented_pending_verification`，与实现类 Issue 的 canonical 状态
-  语义一致。
+- `issue-077` / `issue-078` / `issue-079` / `issue-080` /
+  `issue-081` → **verified**（T01–T08 全部满足，含钉住上游证据）。
+  2026-08-28 的账本对账将实现类 Issue 与已验证的 `082–084` 统一为同一
+  终态，并修复了 `issue-081` 依赖未终结的问题。
 - `issue-054` 的 reopen 条件已满足，回到
   `implemented_pending_verification`；Feature 007 的最终独立验收仍由
   `issue-055` 负责。
@@ -143,4 +143,5 @@ loopback。
 
 ## 6. 发布结论
 
-Feature 017 的接受记录见 `docs/issue#0081.html`。
+Feature 017 的接受记录见
+`.issues/issue-081-memory-mvp01-verification.md` 的 Completion Record。

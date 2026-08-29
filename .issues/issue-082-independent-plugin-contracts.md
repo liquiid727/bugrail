@@ -25,3 +25,14 @@ catch-all TencentDB manifest or vendor DTOs outside Adapters.
 ## Verification
 
 Cover `BUGRAIL-SPECOS-028.T01-T02` and invalid configuration from `T04`.
+
+## Completion Record
+
+- Implemented separate Memory, Wiki, CodeGraph and Skill contracts, a
+  kind-checked `AssetRef` envelope and a static validated registry.
+- Deterministic adapters cover the contract while production non-Memory
+  adapters remain owned by later Features; Memory retains its existing
+  registry compatibility path.
+- Verification and review are closed by `issue-085`; source hash matches this
+  Issue and the canonical status is `verified`.
+- Spec deviation: none; dynamic loading remains explicitly out of scope.

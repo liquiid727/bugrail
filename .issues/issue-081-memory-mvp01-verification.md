@@ -43,3 +43,15 @@ package/inspector evidence covers the remaining inspector oracles.
   `issue-060` are recorded in the same evidence document.
 - Evidence accepted by the independent verification closeout committed as
   `1c62128d`; canonical status is `verified`.
+
+## Completion Record
+
+- Decision: accept the committed pinned source, Test Spec, patch hashes,
+  commands, exit codes, image digest and redacted traces as the T08 oracle.
+- Verification commit: `1c62128d`; evidence is the result document linked
+  above.
+- Deviation: the closeout session could not rerun T08 because its Docker daemon
+  was unavailable; it reviewed the previously committed pinned execution.
+- Tradeoff: unrelated repository formatting was not pulled into Feature 017.
+- Open question: rerun the ignored pinned Gateway test when the external Docker
+  runtime is deliberately in scope.

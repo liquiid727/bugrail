@@ -39,3 +39,9 @@ Cover symlink/path escape, UTF-8, dedupe, caps, precedence, retries, locales and
 - Command-core T01-T06: pass. QA decision: **blocked** (no live Axum/Tauri parity, no real ACP prompt-dispatch evidence).
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Deterministic Context/loadout regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: live Axum/Tauri parity, real ACP
+  prompt dispatch, and independent Test Spec evidence remain outstanding.

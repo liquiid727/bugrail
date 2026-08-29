@@ -39,3 +39,9 @@ Cover healthy/disabled/degraded/required-blocked, timeout, retry, last-good disp
 - QA decision: **blocked**. T01/T03-T06 pass; T02 has no successful remote health fixture. No live transport test.
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Deterministic provider/Context regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: successful remote health, live
+  transport, and independent Test Spec evidence remain outstanding.

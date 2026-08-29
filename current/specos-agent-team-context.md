@@ -2,14 +2,15 @@
 
 ## Meta
 
-- Date: `2026-08-23`
+- Date: `2026-08-28`
 - PRD: `.prd/prd-specos-agent-team-context-system.md`
 - Source proposals: `docs/codeg-agent-team-orchestration-spec.md`,
   `docs/codeg-memory-context-system-spec.md`
 - Decisions: ADR `001-004`
 - Active Features: `BUGRAIL-SPECOS-001-009`, `015-017`
 - Current implementation Issues: `001-005`, `043-060`, `071-081`
-- Release posture: implemented foundations, independent verification pending
+- Release posture: Features `017` and `028` verified; baseline Features
+  `001-009` and `015-016` retain explicit independent-verification gaps
 
 ## Implemented Baseline
 
@@ -35,8 +36,11 @@
   preview commands and the Context page Memory tab. The exact Test Spec
   T01-T08 was executed 2026-08-22 against the pinned `v2.0.0+bugrail.1`
   fixture; see `tests/results/2026-08-22-specos-017-memory-verification.md`.
-  Issues `077-080` are `implemented_pending_verification` and Issue `081`
-  holds `pending_verification` until that evidence record is accepted.
+  Issues `077-081` are `verified`; the accepted evidence record is bound to
+  the exact Feature/Test Spec hashes.
+- Feature `BUGRAIL-SPECOS-028` is verified through Issues `082-085`: separate
+  plugin contracts, shared assets, durable provider jobs and safe operations
+  projections are established without authorizing draft Features `029-036`.
 - `Teams` and `Context` are first-level localized workbench routes. Task Detail
   links persisted Contract, Run, Context and Handoff facts.
 
@@ -69,10 +73,8 @@ baseline and are not authorized for implementation until reviewed and approved.
 
 Before release, execute Test Specs `001-009` and Issues `005`, `045`, `047`,
 `049`, `051`, `053`, `055`, `058`, `060`, `073`, and `076`. Feature `017`
-requires its own Test Spec and Issue `081` evidence before implementation can
-be called verified: the T01-T08 run and pinned fixture evidence exist
-(`tests/results/2026-08-22-specos-017-memory-verification.md`) and await
-acceptance. Record migration
+is already accepted by Issue `081`; its supplemental evidence does not close
+the other Features' exact Test Specs. Record migration
 up/down and legacy fixtures, Rust tests/check, command-core/Tauri/Axum parity,
 frontend unit tests, TypeScript check, production build, responsive/keyboard
 states, all locale catalogs, restart/concurrency, required-context failure, and

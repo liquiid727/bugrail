@@ -10,13 +10,16 @@ never reused:
   verification.
 - `006-021` are retained as `superseded` historical plans. Each frontmatter
   block names its replacement Feature and Issue range.
+- `022-042` and `061-070` are retained as `superseded` historical plans. They
+  were removed from the working tree on 2026-08-19 but remain occupied IDs and
+  were restored from Git history so they can never be reused.
 - `043-060` and `071-076` are the implementation/verification graph derived
   from `.prd/prd-specos-agent-team-context-system.md` and implemented baseline
   Features `002-009`, `015-016`.
 - `077-081` are the approved Memory Plugin MVP01 delivery graph derived from
   `.prd/prd-memory-plugin-mvp01.md` and Feature `017`.
-- `082-117` are the draft full Memory Operating Layer graph derived from
-  `.prd/prd-memory-operating-layer-roadmap.md` and Features `028-036`.
+- `082-085` are the verified Feature `028` graph. `086-117` are the draft
+  Memory Operating Layer graph for Features `029-036`.
 
 ## Current Issue Groups
 
@@ -47,9 +50,21 @@ never reused:
 ## Execution Rules
 
 - Follow `dependsOn`; numeric order alone is not authority.
+- Canonical IDs and references use `issue-NNN`; display aliases such as
+  `#0081`, `Issue #81`, or `issue#0081` are not separate identifiers.
+- IDs are monotonically allocated and never reused. The current ledger is
+  dense through `issue-117`; the next new Issue is `issue-118`.
 - Recompute the exact source Feature hash before implementation or verification.
+- `planned` means the Issue is not authorized until its source Feature and Test
+  Spec are approved.
 - `implemented_pending_verification` means code is present but the matching Test
   Spec evidence is not yet accepted; it is not equivalent to verified/done.
+- `pending_verification` is owned by a verification Issue whose exact Test Spec
+  has not yet been accepted.
+- `verified` is the only completed terminal state for active implementation and
+  verification Issues. Once the owning exact Test Spec is accepted, covered
+  implementation Issues advance to `verified` as well.
+- `superseded` is a terminal historical state and never authorizes execution.
 - `reopened` means a previously implemented Issue was found to need a bounded
   correction; the reopen record in the Issue body names the scope and the
   closure evidence required.
@@ -63,8 +78,8 @@ never reused:
 ## Local Automation Note
 
 The canonical local Issues are the per-file artifacts in this `.issues/`
-directory, as declared by `.specos/manifest.yaml`. The installed
-`loop-it-local` SpecOS selector reads this manifest and validates the per-file
-frontmatter, exact Feature version/hash, dependencies and cycles. Use that
-source directly; do not copy the graph into a second layout or maintain two
-Issue status sources.
+directory, as declared by `.specos/manifest.yaml`. Run
+`pnpm specos:validate` before delivery; it validates numbering, frontmatter,
+source bindings, references, terminal dependencies and cycles. Use this source
+directly; do not copy the graph into a second layout or maintain separate
+implementation-note artifacts.

@@ -46,3 +46,10 @@ Cover ready/blocked/failed parents, parallel claims, restart, accessible list fa
 - Status remains `pending_verification`: repository-level Rust and TypeScript
   verification is blocked by out-of-scope Memory 017 and 005 Integration UI
   failures, so the Test Spec's required evidence is not fully green.
+
+### 2026-08-28 reconciliation
+
+- Deterministic WorkTask/UI regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: the exact Test Spec still requires
+  live transport and independent acceptance evidence.

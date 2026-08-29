@@ -25,3 +25,13 @@ credentials or make renderer-to-provider calls.
 ## Verification
 
 Cover `BUGRAIL-SPECOS-028.T04-T05` and all visible empty/degraded/error states.
+
+## Completion Record
+
+- Added one shared command core for safe configuration, health and bounded job
+  projections used by Tauri, Axum and the Context UI.
+- Renderer payloads expose safe metadata and digest prefixes, never provider
+  requests, credentials or lease tokens.
+- Verification and review are closed by `issue-085`; source hash matches this
+  Issue and the canonical status is `verified`.
+- Spec deviation: attempt history is intentionally bounded in the UI.

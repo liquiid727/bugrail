@@ -39,3 +39,9 @@ Cover no workspace, starter, validation, save/reload, same-model identities, leg
 - Result: **not verified** (T05/T06 partial). Missing `agents.yaml` fails closed instead of legacy fallback. No live Axum/Tauri catalog roundtrip.
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Deterministic repository tests were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: the live Axum/Tauri catalog roundtrip
+  and independent Test Spec acceptance were not performed.

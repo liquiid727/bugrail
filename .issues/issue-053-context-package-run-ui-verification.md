@@ -39,3 +39,9 @@ Verify deterministic hashes, retry isolation, required blocking, optional absenc
 - Command-core T01-T06: pass. Feature Spec 006 is now **approved** for that slice. QA still **blocked** on live transport / packaged-engine evidence.
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Deterministic Context/WorkTask regressions were rerun; see
+  `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: live transport, packaged-engine, and
+  independent Test Spec evidence remain outstanding.

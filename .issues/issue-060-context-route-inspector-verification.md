@@ -39,3 +39,9 @@ Verify no workspace/loading/empty/ready/degraded/blocked/error, last-good refres
 - QA decision: **blocked**. Overview/provenance/join/last-good/activity pass. T06 has locale key parity only — no keyboard/responsive browser evidence.
 - Status remains `pending_verification`.
 
+### 2026-08-28 reconciliation
+
+- Added and passed deterministic keyboard focus coverage for the Context tabs;
+  see `tests/results/2026-08-28-specos-approved-issue-reconciliation.md`.
+- Status remains `pending_verification`: responsive browser evidence,
+  screenshots, and independent Test Spec acceptance remain outstanding.

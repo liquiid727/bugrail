@@ -25,3 +25,13 @@ Do not replace WorkTask, Automation, EventEmitter or Memory capture delivery.
 
 Cover `BUGRAIL-SPECOS-028.T03`, including duplicate submission, crash and
 retry exhaustion.
+
+## Completion Record
+
+- Persisted one idempotent provider job plus a bounded attempt ledger; raw
+  requests and lease tokens are not stored.
+- Expired leases become interrupted attempts and requeue within the retry
+  budget; SQLite facts remain authoritative over refresh events.
+- Verification and review are closed by `issue-085`; source hash matches this
+  Issue and the canonical status is `verified`.
+- Spec deviation: none; external exactly-once delivery is not claimed.

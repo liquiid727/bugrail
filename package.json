@@ -22,6 +22,8 @@
     "test:release": "node --test scripts/release.test.mjs",
     "test:upstream-check": "node --test scripts/check-upstream-release.test.mjs",
     "test:sync": "node --test scripts/sync-upstream.test.mjs",
+    "specos:validate": "node scripts/validate-specos-issues.mjs",
+    "test:specos": "node --test scripts/validate-specos-issues.test.mjs",
     "upstream:status": "node scripts/check-upstream-release.mjs",
     "sync:upstream": "node scripts/sync-upstream.mjs",
     "server:build": "cd src-tauri && cargo build --release --bin codeg-server --no-default-features",
